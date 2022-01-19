@@ -34,11 +34,20 @@ pub const Unity_Id = enum {
     pub const cnt = @typeInfo(Self).Enum.fields.len;
 
     pub fn range(self: Self) Range {
-        return switch(self) {
+        return switch (self) {
             .infantry => 3,
             .mech => 2,
         };
     }
+
+    pub fn attack(self: Self, other: Self) Damage {
+        const table = [cnt][cnt]Damage{
+            .{ 55, 45, },
+            .{ 65, 55, },
+        };
+        return table[@enumToInt(self)][@enumToInt(other)];
+    }
 };
 
 pub const Range = u8;
+pub const Damage = u8;

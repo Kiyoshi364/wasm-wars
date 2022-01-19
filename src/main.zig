@@ -23,11 +23,10 @@ const obj_cnt = 16;
 const selected_range = 7;
 
 const ptrs = struct {
-    tick: *u16,
-    color: *u16,
-
     gpads: *[4]u8,
     gpads_timer: *[4][4]u4,
+
+    redraw: *bool,
 
     map: *[map_size_y][map_size_x]info.Map_Tile,
     cam: *[2]u8,
@@ -38,22 +37,28 @@ const ptrs = struct {
     selec_offset: *[2]u8,
     selected: *[selected_range][selected_range]u1,
     selec_obj: *ObjId,
+    selec_pos: *[2]u8,
 
     attacked: *u4,
     attac_buff: *[5:null]?ObjId,
 
-    active_obj: *u8,
+    next_obj: *ObjId,
     obj_id: *[obj_cnt]info.Unity_Id,
     obj_info: *[obj_cnt]ObjInfo,
     obj_pos: *[2][obj_cnt]u8,
     obj_map: *[map_size_y][map_size_x]?ObjId,
 
+    freed_cnt: *ObjId,
+    freed_list: *[obj_cnt]ObjId,
+
     const Self = @This();
     const std = @import("std");
 
-    const MAXSIZE = 58975;
+    pub const MAXSIZE = 58975;
     const mem_ptr = 0x19a0;
     const mem_buf = @intToPtr(*[MAXSIZE]u8, mem_ptr);
+
+    pub const alloced_memory = calc_used();
 
     fn init() Self {
         comptime var self: Self = undefined;
@@ -62,7 +67,7 @@ const ptrs = struct {
         inline for (@typeInfo(Self).Struct.fields) |field| {
             const T = @typeInfo(field.field_type).Pointer.child;
             switch (@typeInfo(T)) {
-                .Int, .Array, .Struct, .Enum => {
+                .Int, .Bool, .Array, .Struct, .Enum => {
                     const size = @sizeOf(T);
                     if ( alloc + size > MAXSIZE ) {
                         @compileLog("Type to alloc", T);
@@ -82,6 +87,16 @@ const ptrs = struct {
         }
         return self;
     }
+
+    fn calc_used() comptime_int {
+        comptime var alloc = 0;
+        inline for (@typeInfo(Self).Struct.fields) |field| {
+            const T = @typeInfo(field.field_type).Pointer.child;
+            const size = @sizeOf(T);
+            alloc += size;
+        }
+        return alloc;
+    }
 }.init();
 
 const Cursor_State = enum(u8) {
@@ -100,6 +115,66 @@ const ObjInfo = struct {
 const ObjId = u7;
 
 const obj = struct {
+
+    pub fn create(id: info.Unity_Id, obj_info: ObjInfo, x: u8, y: u8) ObjId {
+        const num = blk: {
+            const freed_cnt = ptrs.freed_cnt.*;
+            if ( freed_cnt > 0 ) {
+                const num = ptrs.freed_list[freed_cnt - 1];
+                ptrs.freed_cnt.* = freed_cnt - 1;
+                break :blk num;
+            } else {
+                const num = ptrs.next_obj.*;
+                ptrs.next_obj.* += 1;
+                break :blk num;
+            }
+        };
+        ptrs.obj_id[num] = id;
+        ptrs.obj_info[num] = obj_info;
+        ptrs.obj_map[y][x] = num;
+        ptrs.obj_pos[0][num] = x;
+        ptrs.obj_pos[1][num] = y;
+        return num;
+    }
+
+    pub fn delete(num: ObjId) void {
+        const x = ptrs.obj_pos[0][num];
+        const y = ptrs.obj_pos[1][num];
+        ptrs.obj_map[y][x] = null;
+
+        // free memory
+        const freed_cnt = ptrs.freed_cnt.*;
+        const list = ptrs.freed_list;
+        const next_obj = ptrs.next_obj.*;
+
+        if ( num == next_obj - 1 ) {
+            var unfreed: u7 = 1;
+            var i: u7 = 1;
+            while ( i < freed_cnt ) : ( i += 1 ) {
+                if ( list[i] == next_obj - unfreed ) {
+                    list[unfreed - 1] = list[i];
+                    unfreed += 1;
+                } else if ( unfreed == 1 ) {
+                    break;
+                }
+            }
+            ptrs.next_obj.* -= unfreed;
+        } else {
+            var n = num;
+            var i: u7 = 0;
+            while ( i < freed_cnt ) : ( i += 1 ) {
+                assert( list[i] != n );
+                if ( list[i] < n ) {
+                    const tmp = list[i];
+                    list[i] = n;
+                    n = tmp;
+                }
+            }
+            list[i] = n;
+            ptrs.freed_cnt.* = freed_cnt + 1;
+        }
+    }
+
     pub fn moveTo(num: ObjId, x: u8, y: u8) void {
         const oldx = ptrs.obj_pos[0][num];
         const oldy = ptrs.obj_pos[1][num];
@@ -112,13 +187,86 @@ const obj = struct {
         ptrs.obj_pos[0][num] = x;
         ptrs.obj_pos[1][num] = y;
     }
+
+    pub fn calc_attack(atk_num: ObjId, def_num: ObjId) u7 {
+        const atk_id = ptrs.obj_id[atk_num];
+        const def_id = ptrs.obj_id[def_num];
+
+        const atk_info = ptrs.obj_info[atk_num];
+        const def_info = ptrs.obj_info[def_num];
+
+        const atk_health = (atk_info.health / 10) * 10;
+        const def_health = (def_info.health / 10) * 10;
+
+        // TODO: Add co lookup
+        const co_atk_bonus = 100;
+        const co_def_bonus = 100;
+
+        // TODO: Add luck calculation (0 ~ 9)
+        const luck = 0;
+
+        const base_damage =
+            @as(u16, atk_id.attack(def_id)) * co_atk_bonus / 100 + luck;
+
+        // TODO: Get defence!
+        const defense = 1;
+
+        const pre_def_damage = base_damage * atk_health / 100;
+
+        const total_damage = pre_def_damage
+            * (200 - co_def_bonus - defense * def_health / 10) / 100;
+
+        assert(0 < total_damage and total_damage < 0x80);
+        return @intCast(u7, total_damage);
+
+        // Formula 1:
+        // s, d := CO attack-buffs, defence-buffs
+        // t := [(b*s/d)*(a*0.1)]
+        // f := t - r*[(t*0.1)-(t*0.1*h)]
+        //
+        // Formula 2:
+        // (b * co_a / 100 + l) * a_h/10 * (200 - co_d - d * d_h) / 100
+    }
+
+    pub fn attack(atk_num: ObjId, def_num: ObjId) void {
+        const atk_info = &ptrs.obj_info[atk_num];
+        const def_info = &ptrs.obj_info[def_num];
+
+        const atk_damage = calc_attack(atk_num, def_num);
+
+        var def_health: u7 = undefined;
+        if ( !@subWithOverflow(u7, def_info.*.health, atk_damage,
+                &def_health) ) {
+            def_info.*.health = @intCast(u7, def_health);
+
+            const def_damage = calc_attack(def_num, atk_num);
+
+            var atk_health: u7 = undefined;
+            if ( !@subWithOverflow(u7, atk_info.*.health, def_damage,
+                    &atk_health) ) {
+                atk_info.*.health = atk_health;
+            } else {
+                obj.delete(atk_num);
+            }
+        } else {
+            obj.delete(def_num);
+        }
+    }
 };
 
 export fn start() void {
-    ptrs.map[7][8] = .mountain;
+    // Debug allocated memory
+    w4.tracef("Memory Usage:\n  Allocated:    %d\n  Free for use: %d",
+        @as(i32, @TypeOf(ptrs).alloced_memory),
+        @as(i32, @TypeOf(ptrs).MAXSIZE - @TypeOf(ptrs).alloced_memory));
+
+    // Draw fst frame
+    ptrs.redraw.* = true;
+
     ptrs.cursor_pos[0] = 1;
     ptrs.cursor_pos[1] = 1;
-    {
+    { // map initialization
+        ptrs.map[7][8] = .mountain;
         var i: u8 = 0;
         var j: u8 = 0;
         while ( j < map_size_y ) : ( j += 1 ) {
@@ -131,11 +279,7 @@ export fn start() void {
         }
     }
     { // obj_map inicialization
-        for ( ptrs.obj_map ) |*line| {
-            for ( line ) |*p| {
-                p.* = null;
-            }
-        }
+        ptrs.obj_map.* = .{ .{ null } ** map_size_x } ** map_size_y;
     }
     { // Put objs
         var i: u7 = 0;
@@ -145,23 +289,19 @@ export fn start() void {
             const y = (j * 0x3) % (map_size_y - 2) + 1;
             if ( x == 0 or x == map_size_x-1 or y == 0 or y == map_size_y-1 ) {
             } else {
-                ptrs.obj_id[i] = @intToEnum(info.Unity_Id, i % info.Unity_Id.cnt);
-                ptrs.obj_info[i] = .{
+                const obj_id = @intToEnum(info.Unity_Id, i % info.Unity_Id.cnt);
+                const obj_info = .{
                     .acted = false,
                     .health = 100,
                     .team = @intCast(u2, i % 2),
                 };
-                ptrs.obj_map[y][x] = i;
-                ptrs.obj_pos[0][i] = x;
-                ptrs.obj_pos[1][i] = y;
+                _ = obj.create(obj_id, obj_info, x, y);
                 i += 1;
-                // w4.tracef("obj: %d:%d - (%d, %d)", j, i, x, y);
             }
         }
-        ptrs.active_obj.* = i;
     }
 
-    // w4.SYSTEM_FLAGS.* = w4.SYSTEM_PRESERVE_FRAMEBUFFER;
+    w4.SYSTEM_FLAGS.* = w4.SYSTEM_PRESERVE_FRAMEBUFFER;
 
     // w4.tone(10, 60, 100, 0);
     w4.tone(262 | (253 << 16), 60, 30, w4.TONE_PULSE1 | w4.TONE_MODE3);
@@ -182,6 +322,7 @@ export fn update() void {
         and (pad_diff & w4.BUTTON_DOWN == w4.BUTTON_DOWN or timer[0] == 0)
         and pad_new & w4.BUTTON_DOWN == w4.BUTTON_DOWN ) {
         timer[0] = gpad_timer_max;
+        ptrs.redraw.* = true;
         switch (ptrs.cursor_state.*) {
             .initial, .selected => {
                 cursor_pos[1] += 1;
@@ -205,6 +346,7 @@ export fn update() void {
         and (pad_diff & w4.BUTTON_UP == w4.BUTTON_UP or timer[1] == 0)
         and pad_new & w4.BUTTON_UP == w4.BUTTON_UP ) {
         timer[1] = gpad_timer_max;
+        ptrs.redraw.* = true;
         switch (ptrs.cursor_state.*) {
             .initial, .selected => {
                 cursor_pos[1] -= 1;
@@ -236,6 +378,7 @@ export fn update() void {
         and (pad_diff & w4.BUTTON_RIGHT == w4.BUTTON_RIGHT or timer[2] == 0)
         and pad_new & w4.BUTTON_RIGHT == w4.BUTTON_RIGHT ) {
         timer[2] = gpad_timer_max;
+        ptrs.redraw.* = true;
         switch (ptrs.cursor_state.*) {
             .initial, .selected => {
                 cursor_pos[0] += 1;
@@ -259,6 +402,7 @@ export fn update() void {
         and (pad_diff & w4.BUTTON_LEFT == w4.BUTTON_LEFT or timer[3] == 0)
         and pad_new & w4.BUTTON_LEFT == w4.BUTTON_LEFT ) {
         timer[3] = gpad_timer_max;
+        ptrs.redraw.* = true;
         switch (ptrs.cursor_state.*) {
             .initial, .selected => {
                 cursor_pos[0] -= 1;
@@ -288,42 +432,16 @@ export fn update() void {
 
     if ( pad_diff & w4.BUTTON_1 == w4.BUTTON_1
             and pad_new & w4.BUTTON_1 == w4.BUTTON_1 ) {
+        ptrs.redraw.* = true;
         switch (ptrs.cursor_state.*) {
             .initial => {
                 const n: ?ObjId = get_obj_num_on_cursor();
 
                 if ( n != null and !ptrs.obj_info[n.?].acted ) {
                     const num = n.?;
-                    const id = ptrs.obj_id[num];
-
-                    const center = (selected_range - 1) / 2;
-                    const range = id.range();
-
-                    const x = cursor_pos[0] - center;
-                    const y = cursor_pos[1] - center;
-                    ptrs.selec_offset[0] = x;
-                    ptrs.selec_offset[1] = y;
-                    ptrs.selec_obj.* = num;
+                    calculate_movable_tiles(num);
 
                     ptrs.cursor_state.* = .selected;
-
-                    for ( ptrs.selected ) |*ss, jj| {
-                        const j = @intCast(u8, jj);
-                        const dj = if ( j < center )
-                            center - j else j - center;
-                        for (ss) |*s, ii| {
-                            const i = @intCast(u8, ii);
-                            const di = if ( i < center )
-                                center - i else i - center;
-                            const empty_space = ptrs.obj_map[y+j][x+i] == null;
-                            const no_move = di + dj == 0;
-                            if ( di + dj <= range and (empty_space or no_move) ) {
-                                s.* = 1;
-                            } else {
-                                s.* = 0;
-                            }
-                        }
-                    }
                 } else {
                     ptrs.cursor_state.* = .menu;
                 }
@@ -339,6 +457,7 @@ export fn update() void {
                     const num = ptrs.selec_obj.*;
                     const obj_x = x + offset[0];
                     const obj_y = y + offset[1];
+                    const team = ptrs.obj_info[num].team;
 
                     ptrs.obj_info[num].acted = true;
                     obj.moveTo(num, obj_x, obj_y);
@@ -347,32 +466,42 @@ export fn update() void {
                     offset[1] = obj_y - center;
                     ptrs.selected.* = .{.{0}**selected_range}**selected_range;
 
+                    const selec_x = obj_x - offset[0];
+                    const selec_y = obj_y - offset[1];
                     var i: u8 = 0;
                     if ( obj_y > 0 and ptrs.obj_map[obj_y-1][obj_x] != null ) {
                         const n2 = ptrs.obj_map[obj_y-1][obj_x].?;
-                        ptrs.selected[obj_y-1-offset[1]][obj_x-offset[0]] = 1;
-                        ptrs.attac_buff[i] = n2;
-                        i += 1;
+                        if ( ptrs.obj_info[n2].team != team ) {
+                            ptrs.selected[selec_y-1][selec_x] = 1;
+                            ptrs.attac_buff[i] = n2;
+                            i += 1;
+                        }
                     }
                     if ( obj_x > 0 and ptrs.obj_map[obj_y][obj_x-1] != null ) {
                         const n2 = ptrs.obj_map[obj_y][obj_x-1].?;
-                        ptrs.selected[obj_y-offset[1]][obj_x-1-offset[0]] = 1;
-                        ptrs.attac_buff[i] = n2;
-                        i += 1;
+                        if ( ptrs.obj_info[n2].team != team ) {
+                            ptrs.selected[selec_y][selec_x-1] = 1;
+                            ptrs.attac_buff[i] = n2;
+                            i += 1;
+                        }
                     }
                     if ( obj_x < map_size_y-1
                         and ptrs.obj_map[obj_y][obj_x+1] != null ) {
                         const n2 = ptrs.obj_map[obj_y][obj_x+1].?;
-                        ptrs.selected[obj_y-offset[1]][obj_x+1-offset[0]] = 1;
-                        ptrs.attac_buff[i] = n2;
-                        i += 1;
+                        if ( ptrs.obj_info[n2].team != team ) {
+                            ptrs.selected[selec_y][selec_x+1] = 1;
+                            ptrs.attac_buff[i] = n2;
+                            i += 1;
+                        }
                     }
                     if ( obj_y < map_size_y-1
                         and ptrs.obj_map[obj_y+1][obj_x] != null ) {
                         const n2 = ptrs.obj_map[obj_y+1][obj_x].?;
-                        ptrs.selected[obj_y+1-offset[1]][obj_x-offset[0]] = 1;
-                        ptrs.attac_buff[i] = n2;
-                        i += 1;
+                        if ( ptrs.obj_info[n2].team != team ) {
+                            ptrs.selected[selec_y+1][selec_x] = 1;
+                            ptrs.attac_buff[i] = n2;
+                            i += 1;
+                        }
                     }
                     ptrs.attacked.* = 0;
                     ptrs.attac_buff[i] = null;
@@ -387,16 +516,34 @@ export fn update() void {
                 }
             },
             .attack => {
+                const atk_num = ptrs.selec_obj.*;
+                assert(ptrs.attac_buff[ptrs.attacked.*] != null);
+                const def_num = ptrs.attac_buff[ptrs.attacked.*].?;
+
+                obj.attack(atk_num, def_num);
+
                 ptrs.cursor_state.* = .initial;
             },
             .menu => {},
         }
     } else if ( pad_diff & w4.BUTTON_2 == w4.BUTTON_2
             and pad_new & w4.BUTTON_2 == w4.BUTTON_2 ) {
+        ptrs.redraw.* = true;
         switch (ptrs.cursor_state.*) {
             .initial => {},
             .selected => ptrs.cursor_state.* = .initial,
-            .attack => {},
+            .attack => {
+                const num = ptrs.selec_obj.*;
+                const old_x = ptrs.selec_pos[0];
+                const old_y = ptrs.selec_pos[1];
+
+                obj.moveTo(num, old_x, old_y);
+                ptrs.cursor_pos.* = .{ old_x, old_y };
+
+                calculate_movable_tiles(num);
+
+                ptrs.cursor_state.* = .selected;
+            },
             .menu => ptrs.cursor_state.* = .initial,
         }
     }
@@ -420,12 +567,47 @@ export fn update() void {
     gpads[0] = pad_new;
     for (timer) |*t| if ( t.* > 0 ) { t.* -= 1; };
 
-    draw();
+    if ( ptrs.redraw.* ) {
+        draw();
+        ptrs.redraw.* = false;
+    }
 }
 
 fn get_obj_num_on_cursor() ?ObjId {
     const c_p = ptrs.cursor_pos;
     return ptrs.obj_map[c_p[1]][c_p[0]];
+}
+
+fn calculate_movable_tiles(num: ObjId) void {
+    const id = ptrs.obj_id[num];
+
+    const center = (selected_range - 1) / 2;
+    const range = id.range();
+
+    const x = ptrs.cursor_pos[0] - center;
+    const y = ptrs.cursor_pos[1] - center;
+    ptrs.selec_offset[0] = x;
+    ptrs.selec_offset[1] = y;
+    ptrs.selec_obj.* = num;
+    ptrs.selec_pos.* = ptrs.cursor_pos.*;
+
+    for ( ptrs.selected ) |*ss, jj| {
+        const j = @intCast(u8, jj);
+        const dj = if ( j < center )
+            center - j else j - center;
+        for (ss) |*s, ii| {
+            const i = @intCast(u8, ii);
+            const di = if ( i < center )
+                center - i else i - center;
+            const empty_space = ptrs.obj_map[y+j][x+i] == null;
+            const no_move = di + dj == 0;
+            if ( di + dj <= range and (empty_space or no_move) ) {
+                s.* = 1;
+            } else {
+                s.* = 0;
+            }
+        }
+    }
 }
 
 fn draw() void {
@@ -434,9 +616,6 @@ fn draw() void {
     draw_objs();
 
     draw_cursor();
-
-    const tick = ptrs.tick;
-    tick.* +%= 1;
 }
 
 fn draw_map() void {
@@ -478,7 +657,7 @@ fn draw_map() void {
 
     switch (ptrs.cursor_state.*) {
         .initial, .menu => {},
-        .selected, => {
+        .selected, .attack => {
             const sx = ptrs.selec_offset[0];
             const sy = ptrs.selec_offset[1];
             for ( ptrs.selected ) |line, jj| {
@@ -487,20 +666,6 @@ fn draw_map() void {
                     const si = @intCast(u8, ii);
                     if ( p == 1 ) {
                         w4.DRAW_COLORS.* = 0x01;
-                        blit4(&g.sqr_selected_q, (sx+si)*ts, (sy+sj)*ts, 8, 8, 0);
-                    }
-                }
-            }
-        },
-        .attack => {
-            const sx = ptrs.selec_offset[0];
-            const sy = ptrs.selec_offset[1];
-            for ( ptrs.selected ) |line, jj| {
-                const sj = @intCast(u8, jj);
-                for ( line ) |p, ii| {
-                    const si = @intCast(u8, ii);
-                    if ( p == 1 ) {
-                        w4.DRAW_COLORS.* = 0x03;
                         blit4(&g.sqr_selected_q, (sx+si)*ts, (sy+sj)*ts, 8, 8, 0);
                     }
                 }
@@ -537,7 +702,21 @@ fn draw_objs() void {
                 const y = (cy+j) * tilespace + 4;
                 const obj_info = ptrs.obj_info[num];
 
-                var color: u16 = switch (obj_info.team) {
+                // Health Bar
+                const health = obj_info.health / 10 + 1;
+                w4.DRAW_COLORS.* = 0x0004;
+                if ( health <= 10 ) {
+                    w4.rect(x - 1, y - 1, health, 1);
+                    if ( health > 6 ) {
+                        w4.DRAW_COLORS.* = 0x0003;
+                        w4.rect(x - 1 + 4, y - 1, 2, 1);
+                    } else if ( health == 5 ) {
+                        w4.DRAW_COLORS.* = 0x0003;
+                        w4.rect(x - 1 + 4, y - 1, 1, 1);
+                    }
+                }
+
+                const color: u16 = switch (obj_info.team) {
                     0 => 0x0104,
                     1 => 0x0103,
                     2 => 0x0401,
