@@ -4,6 +4,7 @@ const w4 = @import("wasm4.zig");
 
 const g = @import("graphics.zig");
 const info = @import("simple_info.zig");
+const alphabet = @import("alphabet.zig");
 
 // Input
 const gpad_timer_max = 13;
@@ -22,8 +23,16 @@ const obj_cnt = 16;
 // selection
 const selected_range = 7;
 
-// day menu
-const day_menu_size = 3;
+// menus
+const day_menu = new_menu( .day_menu, .{
+    .texts = .{
+    // "CO",
+    // "Intel",
+    // "Optns",
+    // "Save",
+    "Cancel",
+    "End Day",
+}});
 
 const ptrs = struct {
     gpads: *[4]u8,
@@ -36,6 +45,7 @@ const ptrs = struct {
 
     curr_day: *u8,
     curr_team: *Team,
+    team_num: *Team,
 
     cursor_pos: *[2]u8,
     cursor_state: *Cursor_State,
@@ -263,6 +273,79 @@ const obj = struct {
     }
 };
 
+fn new_menu(comptime tag: Cursor_State, thing: anytype) type {
+    const TP = @import("std").builtin.TypeInfo;
+    const EF = TP.EnumField;
+    const Decl = TP.Declaration;
+    const decls = [0]Decl{};
+
+    const pre_texts = thing.texts;
+    const fields = @typeInfo(@TypeOf(pre_texts)).Struct.fields;
+
+    comptime var max_len: u8 = 0;
+    comptime var texts: [fields.len][]const u8 = undefined;
+    comptime var enum_f: [fields.len]EF = undefined;
+    inline for ( fields ) |f, i| {
+        const t = @field(pre_texts, f.name);
+        texts[i] = t;
+        enum_f[i] = .{ .name = t, .value = i, };
+        if ( t.len > max_len )
+            max_len = t.len;
+    }
+    const block_cnt = max_len / 2 + 1;
+    const Enum = @Type(.{ .Enum = .{
+        .layout = .Auto, .tag_type = u8, .fields = &enum_f,
+        .decls = &decls, .is_exhaustive = true,
+    } });
+    return struct {
+        const Enum: type = Enum;
+        const tag: Cursor_State = tag;
+        const texts: [][]const u8 = &texts;
+        const block_cnt: u8 = block_cnt;
+        const size: u8 = texts.len;
+
+        fn incCursor() void {
+            const c_menu = ptrs.cursor_menu;
+            c_menu.* = (c_menu.* + 1) % size;
+        }
+
+        fn decCursor() void {
+            const c_menu = ptrs.cursor_menu;
+            c_menu.* = (c_menu.* - 1 + size) % size;
+        }
+
+        fn name(i: u8) Enum {
+            return @intToEnum(Enum, i);
+        }
+
+        fn draw() void {
+            const x = ptrs.cursor_pos[0] * tilespace;
+            const y = ptrs.cursor_pos[1] * tilespace;
+
+            const xa = x + tilespace;
+            const ya = y + 8 * ptrs.cursor_menu.*;
+            const off = 2;
+
+            w4.DRAW_COLORS.* = 0x01;
+            var j: u8 = 0;
+            while ( j < size ) : ( j += 1 ) {
+                var i: u8 = 0;
+                while ( i < block_cnt ) : ( i += 1 ) {
+                    blit(&g.square, xa + i * 8, y + j * 8, 8, 8, 0);
+                }
+            }
+            w4.DRAW_COLORS.* = 0x02;
+            inline for ( texts ) |t, i| {
+                text(t, xa + off, y + off + @intCast(i32, i) * 8);
+            }
+
+            w4.DRAW_COLORS.* = 0x03;
+            blit(&g.select_thin_q, xa, ya, 8, 8, 0);
+            blit(&g.select_thin_q, xa + 8 * (block_cnt - 1), ya, 8, 8, 6);
+        }
+    };
+}
+
 export fn start() void {
     // Debug allocated memory
     w4.tracef("Memory Usage:\n  Allocated:    %d\n  Free for use: %d",
@@ -287,10 +370,14 @@ export fn start() void {
             }
         }
     }
+    { // Set team count
+        ptrs.team_num.* = 2;
+    }
     { // obj_map inicialization
         ptrs.obj_map.* = .{ .{ null } ** map_size_x } ** map_size_y;
     }
     { // Put objs
+        const team_num = ptrs.team_num.*;
         var i: u7 = 0;
         var j: u8 = 0;
         while ( j < obj_cnt ) : ( j += 1 ) {
@@ -302,7 +389,7 @@ export fn start() void {
                 const obj_info = .{
                     .acted = false,
                     .health = 100,
-                    .team = @intCast(u2, i % 2),
+                    .team = @intCast(u2, i % team_num),
                 };
                 _ = obj.create(obj_id, obj_info, x, y);
                 i += 1;
@@ -332,7 +419,7 @@ export fn update() void {
         and pad_new & w4.BUTTON_DOWN == w4.BUTTON_DOWN ) {
         timer[0] = gpad_timer_max;
         ptrs.redraw.* = true;
-        switch (ptrs.cursor_state.*) {
+        switch ( ptrs.cursor_state.* ) {
             .initial, .selected => {
                 cursor_pos[1] += 1;
             },
@@ -349,17 +436,14 @@ export fn update() void {
                     ptrs.attacked.* = 0;
                 }
             },
-            .day_menu => {
-                const c_menu = ptrs.cursor_menu;
-                c_menu.* = (c_menu.* + 1) % day_menu_size;
-            },
+            .day_menu => day_menu.incCursor(),
         }
     } else if ( cursor_pos[1] > 0
         and (pad_diff & w4.BUTTON_UP == w4.BUTTON_UP or timer[1] == 0)
         and pad_new & w4.BUTTON_UP == w4.BUTTON_UP ) {
         timer[1] = gpad_timer_max;
         ptrs.redraw.* = true;
-        switch (ptrs.cursor_state.*) {
+        switch ( ptrs.cursor_state.* ) {
             .initial, .selected => {
                 cursor_pos[1] -= 1;
             },
@@ -382,10 +466,7 @@ export fn update() void {
                     ptrs.attacked.* = last_atk;
                 }
             },
-            .day_menu => {
-                const c_menu = ptrs.cursor_menu;
-                c_menu.* = (c_menu.* - 1 + day_menu_size) % day_menu_size;
-            },
+            .day_menu => day_menu.decCursor(),
         }
     }
 
@@ -394,7 +475,7 @@ export fn update() void {
         and pad_new & w4.BUTTON_RIGHT == w4.BUTTON_RIGHT ) {
         timer[2] = gpad_timer_max;
         ptrs.redraw.* = true;
-        switch (ptrs.cursor_state.*) {
+        switch ( ptrs.cursor_state.* ) {
             .initial, .selected => {
                 cursor_pos[0] += 1;
             },
@@ -418,7 +499,7 @@ export fn update() void {
         and pad_new & w4.BUTTON_LEFT == w4.BUTTON_LEFT ) {
         timer[3] = gpad_timer_max;
         ptrs.redraw.* = true;
-        switch (ptrs.cursor_state.*) {
+        switch ( ptrs.cursor_state.* ) {
             .initial, .selected => {
                 cursor_pos[0] -= 1;
             },
@@ -448,7 +529,7 @@ export fn update() void {
     if ( pad_diff & w4.BUTTON_1 == w4.BUTTON_1
             and pad_new & w4.BUTTON_1 == w4.BUTTON_1 ) {
         ptrs.redraw.* = true;
-        switch (ptrs.cursor_state.*) {
+        switch ( ptrs.cursor_state.* ) {
             .initial => {
                 const n: ?ObjId = get_obj_num_on_cursor();
 
@@ -546,12 +627,27 @@ export fn update() void {
 
                 ptrs.cursor_state.* = .initial;
             },
-            .day_menu => {},
+            .day_menu => switch ( day_menu.name(ptrs.cursor_menu.*) ) {
+                    .@"Cancel"  => ptrs.cursor_state.* = .initial,
+                    .@"End Day" => {
+                        const curr_team = ptrs.curr_team.*;
+
+                        reset_acted(curr_team);
+                        const next_team = (curr_team + 1) % ptrs.team_num.*;
+                        ptrs.curr_team.* = next_team;
+                        if ( next_team < curr_team ) {
+                            ptrs.curr_day.* += 1;
+                        }
+
+                        turn_start(next_team);
+                        ptrs.cursor_state.* = .initial;
+                    },
+            },
         }
     } else if ( pad_diff & w4.BUTTON_2 == w4.BUTTON_2
             and pad_new & w4.BUTTON_2 == w4.BUTTON_2 ) {
         ptrs.redraw.* = true;
-        switch (ptrs.cursor_state.*) {
+        switch ( ptrs.cursor_state.* ) {
             .initial => {},
             .selected => ptrs.cursor_state.* = .initial,
             .attack => {
@@ -632,6 +728,18 @@ fn calculate_movable_tiles(num: ObjId) void {
     }
 }
 
+fn reset_acted(team: Team) void {
+    for ( ptrs.obj_info.* ) |*obj_info| {
+        if ( obj_info.*.team == team ) {
+            obj_info.*.acted = false;
+        }
+    }
+}
+
+fn turn_start(team: Team) void {
+    _ = team;
+}
+
 fn draw() void {
     draw_map();
 
@@ -705,22 +813,8 @@ fn draw_cursor() void {
         .initial, .selected =>
             blit4(&g.select_q, x, y, 8, 8, 0),
         .attack => blit4(&g.select_q, x, y, 8, 8, 4),
-        .day_menu => draw_day_menu(),
+        .day_menu => day_menu.draw(),
     }
-}
-
-fn draw_day_menu() void {
-    const x = ptrs.cursor_pos[0] * tilespace;
-    const y = ptrs.cursor_pos[1] * tilespace;
-    w4.DRAW_COLORS.* = 0x01;
-
-    const xa = x + tilespace;
-    var i: u8 = 0;
-    while ( i < day_menu_size ) : ( i += 1 ) {
-        blit2(&g.square, xa, y + i * 8, 8, 8, 0);
-    }
-    w4.DRAW_COLORS.* = 0x03;
-    blit_d1(&g.select_thin_q, xa, y + 8 * ptrs.cursor_menu.*, 8, 8, 0);
 }
 
 fn draw_objs() void {
@@ -791,20 +885,12 @@ fn blit4(sprite: [*]const u8, x: i32, y: i32,
     blit(sprite, x + w, y + h, w, h, flags ^ 6);
 }
 
-fn blit2(sprite: [*]const u8, x: i32, y: i32,
-    w: i32, h: i32, flags: u32) void {
-    blit(sprite, x    , y    , w, h, flags ^ 0);
-    blit(sprite, x + w, y    , w, h, flags ^ 2);
-}
-
-fn blit_d1(sprite: [*]const u8, x: i32, y: i32,
-    w: i32, h: i32, flags: u32) void {
-    blit(sprite, x    , y     , w, h, flags ^ 0);
-    blit(sprite, x + w, y     , w, h, flags ^ 6);
-}
-
-fn blit_d2(sprite: [*]const u8, x: i32, y: i32,
-    w: i32, h: i32, flags: u32) void {
-    blit(sprite, x + w, y     , w, h, flags ^ 2);
-    blit(sprite, x    , y     , w, h, flags ^ 4);
+fn text(comptime str: []const u8, x: i32, y: i32) void {
+    const letters = alphabet.encode(str);
+    const advance = 4;
+    for (letters) |l, i| {
+        if (l) |letter| {
+            blit(&letter, x + @intCast(i32, i) * advance, y, 8, 4, 0);
+        }
+    }
 }
