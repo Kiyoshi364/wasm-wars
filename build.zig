@@ -46,9 +46,9 @@ test "stack version check" {
 
 pub fn build(b: *std.build.Builder) !void {
     const zig_version = @import("builtin").zig_version;
-    // const mode = b.standardReleaseOptions();
     // Forcing release small
-    const mode = std.builtin.Mode.ReleaseSmall;
+    // const mode = std.builtin.Mode.ReleaseSmall;
+    const mode = b.standardReleaseOptions();
     const lib = b.addSharedLibrary("cart", "src/main.zig", .unversioned);
     lib.setBuildMode(mode);
     lib.setTarget(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });

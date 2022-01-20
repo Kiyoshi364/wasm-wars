@@ -547,27 +547,27 @@ export fn update() void {
                 const obj_info = ptrs.obj_info[ptrs.selec_obj.*];
                 if ( obj_info.team == ptrs.curr_team.* ) {
                     const offset = ptrs.selec_offset;
-                    const x = cursor_pos[0] - offset[0];
-                    const y = cursor_pos[1] - offset[1];
-                    if ( 0 <= x and x <= selected_range
-                        and 0 <= y and y <= selected_range
-                        and ptrs.selected[y][x] == 1 ) {
+                    const old_selec_x = cursor_pos[0] -% offset[0];
+                    const old_selec_y = cursor_pos[1] -% offset[1];
+                    if ( old_selec_x <= selected_range
+                        and old_selec_y <= selected_range
+                        and ptrs.selected[old_selec_y][old_selec_x] == 1 ) {
                         const center = (selected_range - 1) / 2;
                         const num = ptrs.selec_obj.*;
-                        const obj_x = x + offset[0];
-                        const obj_y = y + offset[1];
+                        const obj_x = old_selec_x +% offset[0];
+                        const obj_y = old_selec_y +% offset[1];
                         const team = ptrs.obj_info[num].team;
 
                         ptrs.obj_info[num].acted = true;
                         obj.moveTo(num, obj_x, obj_y);
 
-                        offset[0] = obj_x - center;
-                        offset[1] = obj_y - center;
+                        offset[0] = obj_x -% center;
+                        offset[1] = obj_y -% center;
                         ptrs.selected.* =
                             .{ .{0} ** selected_range } ** selected_range;
 
-                        const selec_x = obj_x - offset[0];
-                        const selec_y = obj_y - offset[1];
+                        const selec_x = obj_x -% offset[0];
+                        const selec_y = obj_y -% offset[1];
                         var i: u8 = 0;
                         if ( obj_y > 0
                             and ptrs.obj_map[obj_y-1][obj_x] != null ) {
@@ -702,8 +702,8 @@ fn calculate_movable_tiles(num: ObjId) void {
     const center = (selected_range - 1) / 2;
     const range = id.range();
 
-    const x = ptrs.cursor_pos[0] - center;
-    const y = ptrs.cursor_pos[1] - center;
+    const x = ptrs.cursor_pos[0] -% center;
+    const y = ptrs.cursor_pos[1] -% center;
     ptrs.selec_offset[0] = x;
     ptrs.selec_offset[1] = y;
     ptrs.selec_obj.* = num;
@@ -711,13 +711,15 @@ fn calculate_movable_tiles(num: ObjId) void {
 
     for ( ptrs.selected ) |*ss, jj| {
         const j = @intCast(u8, jj);
+        if ( y +% j >= map_size_y ) continue;
         const dj = if ( j < center )
             center - j else j - center;
         for (ss) |*s, ii| {
             const i = @intCast(u8, ii);
+            if ( x +% i >= map_size_x ) continue;
             const di = if ( i < center )
                 center - i else i - center;
-            const empty_space = ptrs.obj_map[y+j][x+i] == null;
+            const empty_space = ptrs.obj_map[y+%j][x+%i] == null;
             const no_move = di + dj == 0;
             if ( di + dj <= range and (empty_space or no_move) ) {
                 s.* = 1;
@@ -758,30 +760,38 @@ fn draw_map() void {
     var i: u8 = 0;
     var j: u8 = 0;
     while ( j < screen_tiles_y ) : ( j += 1 ) {
+        const y = cy +% j;
+        if ( y > map_size_y ) continue;
         i = 0;
         while ( i < screen_tiles_x ) : ( i += 1 ) {
-            const tile = map[cy+j][cx+i];
+            const x = cx +% i;
+            if ( x > map_size_x ) continue;
+            const tile = map[y][x];
             switch (tile) {
                 .mountain => {
                     w4.DRAW_COLORS.* = 0x43;
-                    blit4(&g.square, (cx+i)*ts, (cy+j)*ts, 8, 8, 0);
+                    blit4(&g.square, x*ts, y*ts, 8, 8, 0);
                 },
                 .sea => {
                     w4.DRAW_COLORS.* = 0x44;
-                    blit4(&g.square, (cx+i)*ts, (cy+j)*ts, 8, 8, 0);
+                    blit4(&g.square, x*ts, y*ts, 8, 8, 0);
                 },
                 else => {
                     w4.DRAW_COLORS.* = 0x21;
-                    blit4(&g.sqr_border_q, (cx+i)*ts, (cy+j)*ts, 8, 8, 0);
+                    blit4(&g.sqr_border_q, x*ts, y*ts, 8, 8, 0);
                 }
             }
         }
     }
     while ( j <= 10 ) : ( j += 1 ) {
+        const y = cy +% j;
+        if ( y > map_size_y ) continue;
         i = 0;
         while ( i <= 10 ) : ( i += 1 ) {
+            const x = cx +% i;
+            if ( x > map_size_x ) continue;
             w4.DRAW_COLORS.* = 0x43;
-            blit4(&g.square, (cx+i)*ts, (cy+j)*ts, 8, 8, 0);
+            blit4(&g.square, x*ts, y*ts, 8, 8, 0);
         }
     }
 
@@ -792,11 +802,15 @@ fn draw_map() void {
             const sy = ptrs.selec_offset[1];
             for ( ptrs.selected ) |line, jj| {
                 const sj = @intCast(u8, jj);
+                const y = sy +% sj;
+                if ( y > map_size_y ) continue;
                 for ( line ) |p, ii| {
                     const si = @intCast(u8, ii);
+                    const x = sx +% si;
+                    if ( x > map_size_x ) continue;
                     if ( p == 1 ) {
                         w4.DRAW_COLORS.* = 0x01;
-                        blit4(&g.sqr_selected_q, (sx+si)*ts, (sy+sj)*ts, 8, 8, 0);
+                        blit4(&g.sqr_selected_q, x*ts, y*ts, 8, 8, 0);
                     }
                 }
             }
