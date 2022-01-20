@@ -22,6 +22,9 @@ const obj_cnt = 16;
 // selection
 const selected_range = 7;
 
+// day menu
+const day_menu_size = 3;
+
 const ptrs = struct {
     gpads: *[4]u8,
     gpads_timer: *[4][4]u4,
@@ -31,8 +34,12 @@ const ptrs = struct {
     map: *[map_size_y][map_size_x]info.Map_Tile,
     cam: *[2]u8,
 
+    curr_day: *u8,
+    curr_team: *Team,
+
     cursor_pos: *[2]u8,
     cursor_state: *Cursor_State,
+    cursor_menu: *u8,
 
     selec_offset: *[2]u8,
     selected: *[selected_range][selected_range]u1,
@@ -99,17 +106,19 @@ const ptrs = struct {
     }
 }.init();
 
+const Team = u2;
+
 const Cursor_State = enum(u8) {
     initial = 0,
     selected,
     attack,
-    menu,
+    day_menu,
 };
 
 const ObjInfo = struct {
     acted: bool,
     health: u7,
-    team: u2,
+    team: Team,
 };
 
 const ObjId = u7;
@@ -340,7 +349,10 @@ export fn update() void {
                     ptrs.attacked.* = 0;
                 }
             },
-            .menu => {},
+            .day_menu => {
+                const c_menu = ptrs.cursor_menu;
+                c_menu.* = (c_menu.* + 1) % day_menu_size;
+            },
         }
     } else if ( cursor_pos[1] > 0
         and (pad_diff & w4.BUTTON_UP == w4.BUTTON_UP or timer[1] == 0)
@@ -370,7 +382,10 @@ export fn update() void {
                     ptrs.attacked.* = last_atk;
                 }
             },
-            .menu => {},
+            .day_menu => {
+                const c_menu = ptrs.cursor_menu;
+                c_menu.* = (c_menu.* - 1 + day_menu_size) % day_menu_size;
+            },
         }
     }
 
@@ -396,7 +411,7 @@ export fn update() void {
                     ptrs.attacked.* = 0;
                 }
             },
-            .menu => {},
+            .day_menu => {},
         }
     } else if ( cursor_pos[0] > 0
         and (pad_diff & w4.BUTTON_LEFT == w4.BUTTON_LEFT or timer[3] == 0)
@@ -426,7 +441,7 @@ export fn update() void {
                     ptrs.attacked.* = last_atk;
                 }
             },
-            .menu => {},
+            .day_menu => {},
         }
     }
 
@@ -443,75 +458,82 @@ export fn update() void {
 
                     ptrs.cursor_state.* = .selected;
                 } else {
-                    ptrs.cursor_state.* = .menu;
+                    ptrs.cursor_menu.* = 0;
+                    ptrs.cursor_state.* = .day_menu;
                 }
             },
             .selected => {
-                const offset = ptrs.selec_offset;
-                const x = cursor_pos[0] - offset[0];
-                const y = cursor_pos[1] - offset[1];
-                if ( 0 <= x and x <= selected_range
-                    and 0 <= y and y <= selected_range
-                    and ptrs.selected[y][x] == 1 ) {
-                    const center = (selected_range - 1) / 2;
-                    const num = ptrs.selec_obj.*;
-                    const obj_x = x + offset[0];
-                    const obj_y = y + offset[1];
-                    const team = ptrs.obj_info[num].team;
+                const obj_info = ptrs.obj_info[ptrs.selec_obj.*];
+                if ( obj_info.team == ptrs.curr_team.* ) {
+                    const offset = ptrs.selec_offset;
+                    const x = cursor_pos[0] - offset[0];
+                    const y = cursor_pos[1] - offset[1];
+                    if ( 0 <= x and x <= selected_range
+                        and 0 <= y and y <= selected_range
+                        and ptrs.selected[y][x] == 1 ) {
+                        const center = (selected_range - 1) / 2;
+                        const num = ptrs.selec_obj.*;
+                        const obj_x = x + offset[0];
+                        const obj_y = y + offset[1];
+                        const team = ptrs.obj_info[num].team;
 
-                    ptrs.obj_info[num].acted = true;
-                    obj.moveTo(num, obj_x, obj_y);
+                        ptrs.obj_info[num].acted = true;
+                        obj.moveTo(num, obj_x, obj_y);
 
-                    offset[0] = obj_x - center;
-                    offset[1] = obj_y - center;
-                    ptrs.selected.* = .{.{0}**selected_range}**selected_range;
+                        offset[0] = obj_x - center;
+                        offset[1] = obj_y - center;
+                        ptrs.selected.* =
+                            .{ .{0} ** selected_range } ** selected_range;
 
-                    const selec_x = obj_x - offset[0];
-                    const selec_y = obj_y - offset[1];
-                    var i: u8 = 0;
-                    if ( obj_y > 0 and ptrs.obj_map[obj_y-1][obj_x] != null ) {
-                        const n2 = ptrs.obj_map[obj_y-1][obj_x].?;
-                        if ( ptrs.obj_info[n2].team != team ) {
-                            ptrs.selected[selec_y-1][selec_x] = 1;
-                            ptrs.attac_buff[i] = n2;
-                            i += 1;
+                        const selec_x = obj_x - offset[0];
+                        const selec_y = obj_y - offset[1];
+                        var i: u8 = 0;
+                        if ( obj_y > 0
+                            and ptrs.obj_map[obj_y-1][obj_x] != null ) {
+                            const n2 = ptrs.obj_map[obj_y-1][obj_x].?;
+                            if ( ptrs.obj_info[n2].team != team ) {
+                                ptrs.selected[selec_y-1][selec_x] = 1;
+                                ptrs.attac_buff[i] = n2;
+                                i += 1;
+                            }
                         }
-                    }
-                    if ( obj_x > 0 and ptrs.obj_map[obj_y][obj_x-1] != null ) {
-                        const n2 = ptrs.obj_map[obj_y][obj_x-1].?;
-                        if ( ptrs.obj_info[n2].team != team ) {
-                            ptrs.selected[selec_y][selec_x-1] = 1;
-                            ptrs.attac_buff[i] = n2;
-                            i += 1;
+                        if ( obj_x > 0
+                            and ptrs.obj_map[obj_y][obj_x-1] != null ) {
+                            const n2 = ptrs.obj_map[obj_y][obj_x-1].?;
+                            if ( ptrs.obj_info[n2].team != team ) {
+                                ptrs.selected[selec_y][selec_x-1] = 1;
+                                ptrs.attac_buff[i] = n2;
+                                i += 1;
+                            }
                         }
-                    }
-                    if ( obj_x < map_size_y-1
-                        and ptrs.obj_map[obj_y][obj_x+1] != null ) {
-                        const n2 = ptrs.obj_map[obj_y][obj_x+1].?;
-                        if ( ptrs.obj_info[n2].team != team ) {
-                            ptrs.selected[selec_y][selec_x+1] = 1;
-                            ptrs.attac_buff[i] = n2;
-                            i += 1;
+                        if ( obj_x < map_size_y-1
+                            and ptrs.obj_map[obj_y][obj_x+1] != null ) {
+                            const n2 = ptrs.obj_map[obj_y][obj_x+1].?;
+                            if ( ptrs.obj_info[n2].team != team ) {
+                                ptrs.selected[selec_y][selec_x+1] = 1;
+                                ptrs.attac_buff[i] = n2;
+                                i += 1;
+                            }
                         }
-                    }
-                    if ( obj_y < map_size_y-1
-                        and ptrs.obj_map[obj_y+1][obj_x] != null ) {
-                        const n2 = ptrs.obj_map[obj_y+1][obj_x].?;
-                        if ( ptrs.obj_info[n2].team != team ) {
-                            ptrs.selected[selec_y+1][selec_x] = 1;
-                            ptrs.attac_buff[i] = n2;
-                            i += 1;
+                        if ( obj_y < map_size_y-1
+                            and ptrs.obj_map[obj_y+1][obj_x] != null ) {
+                            const n2 = ptrs.obj_map[obj_y+1][obj_x].?;
+                            if ( ptrs.obj_info[n2].team != team ) {
+                                ptrs.selected[selec_y+1][selec_x] = 1;
+                                ptrs.attac_buff[i] = n2;
+                                i += 1;
+                            }
                         }
-                    }
-                    ptrs.attacked.* = 0;
-                    ptrs.attac_buff[i] = null;
+                        ptrs.attacked.* = 0;
+                        ptrs.attac_buff[i] = null;
 
-                    if ( ptrs.attac_buff[0] ) |n2| {
-                        ptrs.cursor_pos[0] = ptrs.obj_pos[0][n2];
-                        ptrs.cursor_pos[1] = ptrs.obj_pos[1][n2];
-                        ptrs.cursor_state.* = .attack;
-                    } else {
-                        ptrs.cursor_state.* = .initial;
+                        if ( ptrs.attac_buff[0] ) |n2| {
+                            ptrs.cursor_pos[0] = ptrs.obj_pos[0][n2];
+                            ptrs.cursor_pos[1] = ptrs.obj_pos[1][n2];
+                            ptrs.cursor_state.* = .attack;
+                        } else {
+                            ptrs.cursor_state.* = .initial;
+                        }
                     }
                 }
             },
@@ -524,7 +546,7 @@ export fn update() void {
 
                 ptrs.cursor_state.* = .initial;
             },
-            .menu => {},
+            .day_menu => {},
         }
     } else if ( pad_diff & w4.BUTTON_2 == w4.BUTTON_2
             and pad_new & w4.BUTTON_2 == w4.BUTTON_2 ) {
@@ -544,7 +566,7 @@ export fn update() void {
 
                 ptrs.cursor_state.* = .selected;
             },
-            .menu => ptrs.cursor_state.* = .initial,
+            .day_menu => ptrs.cursor_state.* = .initial,
         }
     }
 
@@ -656,7 +678,7 @@ fn draw_map() void {
     }
 
     switch (ptrs.cursor_state.*) {
-        .initial, .menu => {},
+        .initial, .day_menu => {},
         .selected, .attack => {
             const sx = ptrs.selec_offset[0];
             const sy = ptrs.selec_offset[1];
@@ -675,17 +697,30 @@ fn draw_map() void {
 }
 
 fn draw_cursor() void {
-    const cursor_pos = ptrs.cursor_pos;
-    const x = cursor_pos[0] * tilespace;
-    const y = cursor_pos[1] * tilespace;
+    const x = ptrs.cursor_pos[0] * tilespace;
+    const y = ptrs.cursor_pos[1] * tilespace;
     w4.DRAW_COLORS.* = 0x03;
 
     switch (ptrs.cursor_state.*) {
         .initial, .selected =>
             blit4(&g.select_q, x, y, 8, 8, 0),
         .attack => blit4(&g.select_q, x, y, 8, 8, 4),
-        .menu => blit4(&g.select_q, x, y, 8, 8, 6),
+        .day_menu => draw_day_menu(),
     }
+}
+
+fn draw_day_menu() void {
+    const x = ptrs.cursor_pos[0] * tilespace;
+    const y = ptrs.cursor_pos[1] * tilespace;
+    w4.DRAW_COLORS.* = 0x01;
+
+    const xa = x + tilespace;
+    var i: u8 = 0;
+    while ( i < day_menu_size ) : ( i += 1 ) {
+        blit2(&g.square, xa, y + i * 8, 8, 8, 0);
+    }
+    w4.DRAW_COLORS.* = 0x03;
+    blit_d1(&g.select_thin_q, xa, y + 8 * ptrs.cursor_menu.*, 8, 8, 0);
 }
 
 fn draw_objs() void {
@@ -717,10 +752,10 @@ fn draw_objs() void {
                 }
 
                 const color: u16 = switch (obj_info.team) {
-                    0 => 0x0104,
-                    1 => 0x0103,
-                    2 => 0x0401,
-                    3 => 0x0104,
+                    0 => 0x0133,
+                    1 => 0x0144,
+                    2 => 0x0143,
+                    3 => 0x0123,
                 };
                 if ( ptrs.obj_info[num].acted ) {
                     w4.DRAW_COLORS.* = color & 0xF0FF;
@@ -754,4 +789,22 @@ fn blit4(sprite: [*]const u8, x: i32, y: i32,
     blit(sprite, x + w, y    , w, h, flags ^ 2);
     blit(sprite, x    , y + h, w, h, flags ^ 4);
     blit(sprite, x + w, y + h, w, h, flags ^ 6);
+}
+
+fn blit2(sprite: [*]const u8, x: i32, y: i32,
+    w: i32, h: i32, flags: u32) void {
+    blit(sprite, x    , y    , w, h, flags ^ 0);
+    blit(sprite, x + w, y    , w, h, flags ^ 2);
+}
+
+fn blit_d1(sprite: [*]const u8, x: i32, y: i32,
+    w: i32, h: i32, flags: u32) void {
+    blit(sprite, x    , y     , w, h, flags ^ 0);
+    blit(sprite, x + w, y     , w, h, flags ^ 6);
+}
+
+fn blit_d2(sprite: [*]const u8, x: i32, y: i32,
+    w: i32, h: i32, flags: u32) void {
+    blit(sprite, x + w, y     , w, h, flags ^ 2);
+    blit(sprite, x    , y     , w, h, flags ^ 4);
 }
