@@ -704,6 +704,7 @@ fn get_obj_num_on_cursor() ?ObjId {
 }
 
 fn calculate_movable_tiles(num: ObjId) void {
+    const team = ptrs.obj_info[num].team;
     const id = ptrs.obj_id[num];
 
     const move_cost = id.move_cost();
@@ -718,8 +719,7 @@ fn calculate_movable_tiles(num: ObjId) void {
     ptrs.selec_obj.* = num;
     ptrs.selec_pos.* = ptrs.cursor_pos.*;
 
-    // Flood fill
-    var next: u8 = 0;
+    // Flood fill (DFS)
     var len: u8 = 1;
     const q_size = 0x30;
     var queue: [q_size][2]u8 = .{ .{ 0, 0 } } ** q_size;
@@ -728,9 +728,10 @@ fn calculate_movable_tiles(num: ObjId) void {
     queue[0] = .{ center, center };
     local_selec[center][center] = mv_max;
 
-    while ( next != len ) : ( next = (next + 1) % q_size ) {
-        const x = queue[next][0];
-        const y = queue[next][1];
+    while ( len > 0 ) {
+        len -= 1;
+        const x = queue[len][0];
+        const y = queue[len][1];
         if ( local_selec[y][x] ) |rem_fuel| {
             const directions = [4][2]u8{
                 .{ x, y-%1 }, .{ x-%1, y }, .{ x+1, y }, .{ x, y+1 }
@@ -738,25 +739,37 @@ fn calculate_movable_tiles(num: ObjId) void {
             for ( directions ) |d| {
                 const dx = d[0];
                 const dy = d[1];
+                if ( dx >= selected_range or dy >= selected_range ) {
+                    w4.trace("Flood fill: unit has too much movement?");
+                    unreachable;
+                }
                 const sx = dx +% selec_x;
                 const sy = dy +% selec_y;
                 const movable = ptrs.map[sy][sx].move_cost(mv_typ);
                 if ( movable ) |cost| {
+                    const maybe_same_team = blk: {
+                        const maybe_num = ptrs.obj_map[sy][sx];
+                        if ( maybe_num ) |n2| {
+                            break :blk team == ptrs.obj_info[n2].team;
+                        } else {
+                            break :blk null;
+                        }
+                    };
                     var new_fuel: info.Cost = undefined;
                     const overflow = @subWithOverflow(info.Cost,
                         rem_fuel, cost, &new_fuel);
                     if ( !overflow
-                        and dx < selected_range
-                        and dy < selected_range
+                            and ( maybe_same_team == null or
+                                maybe_same_team.? )
                         and ( local_selec[dy][dx] == null
                             or local_selec[dy][dx].? < new_fuel ) ) {
                         local_selec[dy][dx] = new_fuel;
-                        queue[len] = .{ dx, dy };
-                        len = (len + 1) % q_size;
-                        if ( len == next ) {
+                        if ( len == q_size ) {
                             w4.trace("Flood fill: queue overflow!");
                             unreachable;
                         }
+                        queue[len] = .{ dx, dy };
+                        len = len + 1;
                     }
                 }
             }
@@ -764,7 +777,7 @@ fn calculate_movable_tiles(num: ObjId) void {
             w4.tracef("Flood Fill: found null value at pos (%d, %d)",
                 x, y);
             w4.tracef("id: %d, move_max: %d", id, mv_max);
-            w4.tracef("next: %d, size: %d", next, len);
+            w4.tracef("len: %d", len);
             w4.trace("queue:");
             for (queue) |q, i| {
                 w4.tracef("  %d: (%d, %d)", i, q[0], q[1]);
