@@ -637,20 +637,20 @@ export fn update() void {
                 ptrs.cursor_state.* = .initial;
             },
             .day_menu => switch ( day_menu.name(ptrs.cursor_menu.*) ) {
-                    .@"Cancel"  => ptrs.cursor_state.* = .initial,
-                    .@"End Day" => {
-                        const curr_team = ptrs.curr_team.*;
+                .@"Cancel"  => ptrs.cursor_state.* = .initial,
+                .@"End Day" => {
+                    const curr_team = ptrs.curr_team.*;
 
-                        reset_acted(curr_team);
-                        const next_team = (curr_team + 1) % ptrs.team_num.*;
-                        ptrs.curr_team.* = next_team;
-                        if ( next_team < curr_team ) {
-                            ptrs.curr_day.* += 1;
-                        }
+                    reset_acted(curr_team);
+                    const next_team = (curr_team + 1) % ptrs.team_num.*;
+                    ptrs.curr_team.* = next_team;
+                    if ( next_team < curr_team ) {
+                        ptrs.curr_day.* += 1;
+                    }
 
-                        turn_start(next_team);
-                        ptrs.cursor_state.* = .initial;
-                    },
+                    turn_start(next_team);
+                    ptrs.cursor_state.* = .initial;
+                },
             },
         }
     } else if ( pad_diff & w4.BUTTON_2 == w4.BUTTON_2
