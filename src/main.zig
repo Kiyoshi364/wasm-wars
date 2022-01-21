@@ -56,7 +56,7 @@ const ptrs = struct {
     selec_pos: *[2]u8,
 
     attacked: *u4,
-    attac_buff: *[5:null]?ObjId,
+    attac_buff: *[4]?ObjId,
 
     next_obj: *ObjId,
     obj_id: *[obj_cnt]info.Unity_Id,
@@ -166,26 +166,30 @@ const obj = struct {
         const next_obj = ptrs.next_obj.*;
 
         if ( num == next_obj - 1 ) {
-            var unfreed: u7 = 1;
-            var i: u7 = 1;
-            while ( i < freed_cnt ) : ( i += 1 ) {
-                if ( list[i] == next_obj - unfreed ) {
-                    list[unfreed - 1] = list[i];
-                    unfreed += 1;
-                } else if ( unfreed == 1 ) {
-                    break;
-                }
+            var unfreed: u7 = 0;
+            var i: u7 = 0;
+            while ( list[i] == next_obj - 1 - unfreed
+                and i < freed_cnt ) : ( i += 1 ) {
+                unfreed += 1;
             }
-            ptrs.next_obj.* -= unfreed;
+            if ( unfreed > 0 ) {
+                while ( i < freed_cnt ) : ( i += 1 ) {
+                    list[i - unfreed] = list[i];
+                }
+                ptrs.freed_cnt.* -= unfreed;
+            }
+            ptrs.next_obj.* -= (unfreed + 1);
         } else {
             var n = num;
             var i: u7 = 0;
             while ( i < freed_cnt ) : ( i += 1 ) {
-                assert( list[i] != n );
                 if ( list[i] < n ) {
                     const tmp = list[i];
                     list[i] = n;
                     n = tmp;
+                } else if ( list[i] == n ) {
+                    w4.trace("obj.delete: double delete detected!");
+                    unreachable;
                 }
             }
             list[i] = n;
@@ -453,22 +457,23 @@ export fn update() void {
                 cursor_pos[1] -= 1;
             },
             .attack => {
-                const last_atk = blk: {
+                var calc_atk: u4 = undefined;
+                if ( @subWithOverflow(u4,
+                        ptrs.attacked.*, 1, &calc_atk) ) {
                     var i: u4 = 1;
                     while ( ptrs.attac_buff[i] != null ) : ( i += 1 ) {}
-                    break :blk i-1;
-                };
-                const atk = if (ptrs.attacked.* - 1 >= 0)
-                    ptrs.attacked.* - 1 else last_atk;
+                    calc_atk = i - 1;
+                }
+                const atk = calc_atk;
                 if ( ptrs.attac_buff[atk] ) |num| {
                     ptrs.cursor_pos[0] = ptrs.obj_pos[0][num];
                     ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
                     ptrs.attacked.* = atk;
                 } else {
-                    const num = ptrs.attac_buff[last_atk].?;
-                    ptrs.cursor_pos[0] = ptrs.obj_pos[0][num];
-                    ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
-                    ptrs.attacked.* = last_atk;
+                    w4.trace("Input Up (.attack):");
+                    w4.tracef("ptrs.attacked: %d atk: %d",
+                        ptrs.attacked.*, atk);
+                    unreachable;
                 }
             },
             .day_menu => day_menu.decCursor(),
@@ -509,22 +514,23 @@ export fn update() void {
                 cursor_pos[0] -= 1;
             },
             .attack => {
-                const last_atk = blk: {
+                var calc_atk: u4 = undefined;
+                if ( @subWithOverflow(u4,
+                        ptrs.attacked.*, 1, &calc_atk) ) {
                     var i: u4 = 1;
                     while ( ptrs.attac_buff[i] != null ) : ( i += 1 ) {}
-                    break :blk i-1;
-                };
-                const atk = if (ptrs.attacked.* - 1 >= 0)
-                    ptrs.attacked.* - 1 else last_atk;
+                    calc_atk = i - 1;
+                }
+                const atk = calc_atk;
                 if ( ptrs.attac_buff[atk] ) |num| {
                     ptrs.cursor_pos[0] = ptrs.obj_pos[0][num];
                     ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
                     ptrs.attacked.* = atk;
                 } else {
-                    const num = ptrs.attac_buff[last_atk].?;
-                    ptrs.cursor_pos[0] = ptrs.obj_pos[0][num];
-                    ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
-                    ptrs.attacked.* = last_atk;
+                    w4.trace("Input Left (.attack):");
+                    w4.tracef("ptrs.attacked: %d atk: %d",
+                        ptrs.attacked.*, atk);
+                    unreachable;
                 }
             },
             .day_menu => {},
@@ -571,7 +577,8 @@ export fn update() void {
                         offset[0] = obj_x -% center;
                         offset[1] = obj_y -% center;
                         ptrs.selected.* =
-                            .{ .{0} ** selected_range } ** selected_range;
+                            .{ .{ null } ** selected_range }
+                                ** selected_range;
 
                         const selec_x = obj_x -% offset[0];
                         const selec_y = obj_y -% offset[1];
