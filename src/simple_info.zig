@@ -8,12 +8,43 @@ pub const Map_Tile = enum {
 
     const Self = @This();
     pub fn defence(self: Self) Defence {
-        return switch (self) {
-            .road, .bridge, .sea, => 0,
-            .plains, => 1,
-            .woods, => 2,
-            .city, .factory, => 3,
-            .mountain, .hq, => 4,
+        return comptime blk: {
+            break :blk switch (self) {
+                .road, .bridge, .sea, => 0,
+                .plains, => 1,
+                .woods, => 2,
+                .city, .factory, => 3,
+                .mountain, .hq, => 4,
+            };
+        };
+    }
+
+    pub fn move_cost(self: Self, typ: Move_Type) ?Cost {
+        return comptime blk: {
+            break :blk switch (typ) {
+                .infantry => switch (self) {
+                    .plains, .woods, .road,
+                    // .bridge, .beach,
+                    .hq, .city, .factory, // .airport, .port,
+                    // .com_tower, .lab,
+                        => @as(?Cost, 1),
+                    // .river,
+                    .mountain, => @as(Cost, 2),
+                    .sea, // .reefs,
+                    // .pipe, .pipe_seam, .pipe_broken,
+                        => null,
+                },
+                .mech => switch (self) {
+                    .plains, .woods, .mountain, .road,
+                    // .bridge, .beach, .river,
+                    .hq, .city, .factory, // .airport, .port,
+                    // .com_tower, .lab,
+                        => @as(?Cost, 1),
+                    .sea, // .reefs,
+                    // .pipe, .pipe_seam, .pipe_broken,
+                        => null,
+                },
+            };
         };
     }
 };
@@ -33,21 +64,42 @@ pub const Unity_Id = enum {
 
     pub const cnt = @typeInfo(Self).Enum.fields.len;
 
-    pub fn range(self: Self) Range {
-        return switch (self) {
-            .infantry => 3,
-            .mech => 2,
+    pub fn move_cost(self: Self) Move_Cost {
+        return comptime blk: {
+            break :blk switch (self) {
+                .infantry => Move_Cost{ .typ = .infantry, .moves = 3 },
+                .mech     => Move_Cost{ .typ = .mech    , .moves = 2 },
+            };
         };
     }
 
     pub fn attack(self: Self, other: Self) Damage {
-        const table = [cnt][cnt]Damage{
-            .{ 55, 45, },
-            .{ 65, 55, },
+        return comptime blk: {
+            break :blk switch (self) {
+                .infantry => switch (other) {
+                    .infantry => @as(Damage, 55),
+                    .mech     => @as(Damage, 45),
+                },
+                .mech => switch (other) {
+                    .infantry => @as(Damage, 65),
+                    .mech     => @as(Damage, 55),
+                },
+            };
         };
-        return table[@enumToInt(self)][@enumToInt(other)];
     }
 };
 
-pub const Range = u8;
+pub const Move_Type = enum {
+    infantry, mech,
+    // .tires .treads,
+    // .air,
+    // .ship, .lander,
+};
+
+pub const Move_Cost = struct {
+    typ: Move_Type,
+    moves: Cost,
+};
+
+pub const Cost = u4;
 pub const Damage = u8;

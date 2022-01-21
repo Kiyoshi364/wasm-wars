@@ -21,18 +21,17 @@ const screen_tiles_y =
 const obj_cnt = 16;
 
 // selection
-const selected_range = 7;
+const selected_range = 19;
 
 // menus
-const day_menu = new_menu( .day_menu, .{
-    .texts = .{
+const day_menu = new_menu( .day_menu, &[_][]const u8{
     // "CO",
     // "Intel",
     // "Optns",
     // "Save",
     "Cancel",
     "End Day",
-}});
+});
 
 const ptrs = struct {
     gpads: *[4]u8,
@@ -52,7 +51,7 @@ const ptrs = struct {
     cursor_menu: *u8,
 
     selec_offset: *[2]u8,
-    selected: *[selected_range][selected_range]u1,
+    selected: *[selected_range][selected_range]?info.Cost,
     selec_obj: *ObjId,
     selec_pos: *[2]u8,
 
@@ -235,6 +234,12 @@ const obj = struct {
         const total_damage = pre_def_damage
             * (200 - co_def_bonus - defense * def_health / 10) / 100;
 
+        w4.trace("calc_attack:");
+        w4.tracef("  atk_id: %s", @enumToInt(atk_id));
+        w4.tracef("  def_id: %s", @enumToInt(def_id));
+        w4.tracef("  base_damage: %d", base_damage);
+        w4.tracef("  pre_def_damage: %d", pre_def_damage);
+        w4.tracef("  total_damage: %d", total_damage);
         assert(0 < total_damage and total_damage < 0x80);
         return @intCast(u7, total_damage);
 
@@ -273,21 +278,15 @@ const obj = struct {
     }
 };
 
-fn new_menu(comptime tag: Cursor_State, thing: anytype) type {
+fn new_menu(comptime tag: Cursor_State, texts: []const []const u8) type {
     const TP = @import("std").builtin.TypeInfo;
     const EF = TP.EnumField;
     const Decl = TP.Declaration;
     const decls = [0]Decl{};
 
-    const pre_texts = thing.texts;
-    const fields = @typeInfo(@TypeOf(pre_texts)).Struct.fields;
-
     comptime var max_len: u8 = 0;
-    comptime var texts: [fields.len][]const u8 = undefined;
-    comptime var enum_f: [fields.len]EF = undefined;
-    inline for ( fields ) |f, i| {
-        const t = @field(pre_texts, f.name);
-        texts[i] = t;
+    comptime var enum_f: [texts.len]EF = undefined;
+    inline for ( texts ) |t, i| {
         enum_f[i] = .{ .name = t, .value = i, };
         if ( t.len > max_len )
             max_len = t.len;
@@ -300,7 +299,7 @@ fn new_menu(comptime tag: Cursor_State, thing: anytype) type {
     return struct {
         const Enum: type = Enum;
         const tag: Cursor_State = tag;
-        const texts: [][]const u8 = &texts;
+        const texts: [][]const u8 = texts;
         const block_cnt: u8 = block_cnt;
         const size: u8 = texts.len;
 
@@ -319,8 +318,8 @@ fn new_menu(comptime tag: Cursor_State, thing: anytype) type {
         }
 
         fn draw() void {
-            const x = ptrs.cursor_pos[0] * tilespace;
-            const y = ptrs.cursor_pos[1] * tilespace;
+            const x = @as(i32, ptrs.cursor_pos[0]) * tilespace;
+            const y = @as(i32, ptrs.cursor_pos[1]) * tilespace;
 
             const xa = x + tilespace;
             const ya = y + 8 * ptrs.cursor_menu.*;
@@ -549,9 +548,10 @@ export fn update() void {
                     const offset = ptrs.selec_offset;
                     const old_selec_x = cursor_pos[0] -% offset[0];
                     const old_selec_y = cursor_pos[1] -% offset[1];
-                    if ( old_selec_x <= selected_range
-                        and old_selec_y <= selected_range
-                        and ptrs.selected[old_selec_y][old_selec_x] == 1 ) {
+                    if ( old_selec_x < selected_range
+                        and old_selec_y < selected_range
+                        and ptrs.selected[old_selec_y][old_selec_x] != null
+                        ) {
                         const center = (selected_range - 1) / 2;
                         const num = ptrs.selec_obj.*;
                         const obj_x = old_selec_x +% offset[0];
@@ -561,6 +561,7 @@ export fn update() void {
                         ptrs.obj_info[num].acted = true;
                         obj.moveTo(num, obj_x, obj_y);
 
+                        // TODO OOOO: revise this (attackable enemies)
                         offset[0] = obj_x -% center;
                         offset[1] = obj_y -% center;
                         ptrs.selected.* =
@@ -699,35 +700,94 @@ fn get_obj_num_on_cursor() ?ObjId {
 fn calculate_movable_tiles(num: ObjId) void {
     const id = ptrs.obj_id[num];
 
-    const center = (selected_range - 1) / 2;
-    const range = id.range();
+    const move_cost = id.move_cost();
+    const mv_typ = move_cost.typ;
+    const mv_max = move_cost.moves;
 
-    const x = ptrs.cursor_pos[0] -% center;
-    const y = ptrs.cursor_pos[1] -% center;
-    ptrs.selec_offset[0] = x;
-    ptrs.selec_offset[1] = y;
+    const center = (selected_range - 1) / 2;
+    const selec_x = ptrs.cursor_pos[0] -% center;
+    const selec_y = ptrs.cursor_pos[1] -% center;
+    ptrs.selec_offset[0] = selec_x;
+    ptrs.selec_offset[1] = selec_y;
     ptrs.selec_obj.* = num;
     ptrs.selec_pos.* = ptrs.cursor_pos.*;
 
-    for ( ptrs.selected ) |*ss, jj| {
-        const j = @intCast(u8, jj);
-        if ( y +% j >= map_size_y ) continue;
-        const dj = if ( j < center )
-            center - j else j - center;
-        for (ss) |*s, ii| {
-            const i = @intCast(u8, ii);
-            if ( x +% i >= map_size_x ) continue;
-            const di = if ( i < center )
-                center - i else i - center;
-            const empty_space = ptrs.obj_map[y+%j][x+%i] == null;
-            const no_move = di + dj == 0;
-            if ( di + dj <= range and (empty_space or no_move) ) {
-                s.* = 1;
-            } else {
-                s.* = 0;
+    // Flood fill
+    var next: u8 = 0;
+    var len: u8 = 1;
+    const q_size = 0x30;
+    var queue: [q_size][2]u8 = .{ .{ 0, 0 } } ** q_size;
+    var local_selec: [selected_range][selected_range]?info.Cost =
+        .{ .{ null } ** selected_range } ** selected_range;
+    queue[0] = .{ center, center };
+    local_selec[center][center] = mv_max;
+
+    while ( next != len ) : ( next = (next + 1) % q_size ) {
+        const x = queue[next][0];
+        const y = queue[next][1];
+        if ( local_selec[y][x] ) |rem_fuel| {
+            const directions = [4][2]u8{
+                .{ x, y-%1 }, .{ x-%1, y }, .{ x+1, y }, .{ x, y+1 }
+            };
+            for ( directions ) |d| {
+                const dx = d[0];
+                const dy = d[1];
+                const sx = dx +% selec_x;
+                const sy = dy +% selec_y;
+                const movable = ptrs.map[sy][sx].move_cost(mv_typ);
+                if ( movable ) |cost| {
+                    var new_fuel: info.Cost = undefined;
+                    const overflow = @subWithOverflow(info.Cost,
+                        rem_fuel, cost, &new_fuel);
+                    if ( !overflow
+                        and dx < selected_range
+                        and dy < selected_range
+                        and ( local_selec[dy][dx] == null
+                            or local_selec[dy][dx].? < new_fuel ) ) {
+                        local_selec[dy][dx] = new_fuel;
+                        queue[len] = .{ dx, dy };
+                        len = (len + 1) % q_size;
+                        if ( len == next ) {
+                            w4.trace("Flood fill: queue overflow!");
+                            assert(false);
+                        }
+                    }
+                }
             }
+        } else {
+            w4.tracef("Flood Fill: found null value at pos (%d, %d)",
+                x, y);
+            w4.tracef("id: %d, move_max: %d", id, mv_max);
+            w4.tracef("next: %d, size: %d", next, len);
+            w4.trace("queue:");
+            for (queue) |q, i| {
+                w4.tracef("  %d: (%d, %d)", i, q[0], q[1]);
+            }
+            assert(false);
         }
     }
+    ptrs.selected.* = local_selec;
+
+    // Useful for ranged attacks
+    // for ( ptrs.selected ) |*ss, jj| {
+    //     const j = @intCast(u8, jj);
+    //         if ( y +% j >= map_size_y ) continue;
+    //     const dj = if ( j < center )
+    //         center - j else j - center;
+    //     for (ss) |*s, ii| {
+    //         const i = @intCast(u8, ii);
+    //         if ( x +% i >= map_size_x ) continue;
+    //         const di = if ( i < center )
+    //             center - i else i - center;
+    //         const empty_space = ptrs.obj_map[y+%j][x+%i] == null;
+    //         const no_move = di + dj == 0;
+    //         if ( di + dj <= range and (empty_space or no_move) ) {
+    //             s.* = 1;
+    //         } else {
+    //             s.* = 0;
+    //         }
+    //     }
+    // }
 }
 
 fn reset_acted(team: Team) void {
@@ -761,37 +821,28 @@ fn draw_map() void {
     var j: u8 = 0;
     while ( j < screen_tiles_y ) : ( j += 1 ) {
         const y = cy +% j;
+        const yts = @as(i32, y) * @as(i32, ts);
         if ( y > map_size_y ) continue;
         i = 0;
         while ( i < screen_tiles_x ) : ( i += 1 ) {
             const x = cx +% i;
+            const xts = @as(i32, x) * @as(i32, ts);
             if ( x > map_size_x ) continue;
             const tile = map[y][x];
             switch (tile) {
                 .mountain => {
                     w4.DRAW_COLORS.* = 0x43;
-                    blit4(&g.square, x*ts, y*ts, 8, 8, 0);
+                    blit4(&g.square, xts, yts, 8, 8, 0);
                 },
                 .sea => {
                     w4.DRAW_COLORS.* = 0x44;
-                    blit4(&g.square, x*ts, y*ts, 8, 8, 0);
+                    blit4(&g.square, xts, yts, 8, 8, 0);
                 },
                 else => {
                     w4.DRAW_COLORS.* = 0x21;
-                    blit4(&g.sqr_border_q, x*ts, y*ts, 8, 8, 0);
+                    blit4(&g.sqr_border_q, xts, yts, 8, 8, 0);
                 }
             }
-        }
-    }
-    while ( j <= 10 ) : ( j += 1 ) {
-        const y = cy +% j;
-        if ( y > map_size_y ) continue;
-        i = 0;
-        while ( i <= 10 ) : ( i += 1 ) {
-            const x = cx +% i;
-            if ( x > map_size_x ) continue;
-            w4.DRAW_COLORS.* = 0x43;
-            blit4(&g.square, x*ts, y*ts, 8, 8, 0);
         }
     }
 
@@ -803,14 +854,16 @@ fn draw_map() void {
             for ( ptrs.selected ) |line, jj| {
                 const sj = @intCast(u8, jj);
                 const y = sy +% sj;
+                const yts = @as(i32, y) * ts;
                 if ( y > map_size_y ) continue;
                 for ( line ) |p, ii| {
                     const si = @intCast(u8, ii);
                     const x = sx +% si;
+                    const xts = @as(i32, x) * ts;
                     if ( x > map_size_x ) continue;
-                    if ( p == 1 ) {
+                    if ( p ) |_| {
                         w4.DRAW_COLORS.* = 0x01;
-                        blit4(&g.sqr_selected_q, x*ts, y*ts, 8, 8, 0);
+                        blit4(&g.sqr_selected_q, xts, yts, 8, 8, 0);
                     }
                 }
             }
@@ -819,8 +872,8 @@ fn draw_map() void {
 }
 
 fn draw_cursor() void {
-    const x = ptrs.cursor_pos[0] * tilespace;
-    const y = ptrs.cursor_pos[1] * tilespace;
+    const x = @as(i32, ptrs.cursor_pos[0]) * tilespace;
+    const y = @as(i32, ptrs.cursor_pos[1]) * tilespace;
     w4.DRAW_COLORS.* = 0x03;
 
     switch (ptrs.cursor_state.*) {
@@ -841,8 +894,8 @@ fn draw_objs() void {
         while ( i < screen_tiles_x ) : ( i += 1 ) {
             if ( ptrs.obj_map[cy+j][cx+i] ) |num| {
                 const id = ptrs.obj_id[num];
-                const x = (cx+i) * tilespace + 4;
-                const y = (cy+j) * tilespace + 4;
+                const x = @as(i32, cx+i) * tilespace + 4;
+                const y = @as(i32, cy+j) * tilespace + 4;
                 const obj_info = ptrs.obj_info[num];
 
                 // Health Bar
@@ -871,11 +924,9 @@ fn draw_objs() void {
                     w4.DRAW_COLORS.* = color;
                 }
 
-                // const rot = (@as(u8, @enumToInt(id)) % 8) << 1;
                 switch (id) {
                     .infantry => blit(&g.infantry, x, y, 8, 8, 1),
                     .mech     => blit(&g.mech    , x, y, 8, 8, 1),
-                    // else => blit(&g.smiley, x, y, 8, 8, rot),
                 }
             }
         }
@@ -886,8 +937,8 @@ fn draw_objs() void {
 fn blit(sprite: [*]const u8, x: i32, y: i32,
     width: i32, height: i32, flags: u32) void {
     w4.blit(sprite,
-        x - (ptrs.cam[0]*tilespace),
-        y - (ptrs.cam[1]*tilespace),
+        x - @as(i32, ptrs.cam[0]) * tilespace,
+        y - @as(i32, ptrs.cam[1]) * tilespace,
         width, height, flags);
 }
 
