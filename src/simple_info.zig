@@ -67,6 +67,13 @@ pub const Unity_Id = enum {
         };
     }
 
+    pub fn max_fuel(self: Self) Fuel {
+        return switch (self) {
+            .infantry => 99,
+            .mech     => 70,
+        };
+    }
+
     pub fn attack(self: Self, other: Self) Damage {
         return switch (self) {
             .infantry => switch (other) {
@@ -94,4 +101,5 @@ pub const Move_Cost = struct {
 };
 
 pub const Cost = u4;
+pub const Fuel = u7;
 pub const Damage = u8;
