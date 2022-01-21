@@ -213,8 +213,8 @@ const obj = struct {
         const atk_info = ptrs.obj_info[atk_num];
         const def_info = ptrs.obj_info[def_num];
 
-        const atk_health = (atk_info.health / 10) * 10;
-        const def_health = (def_info.health / 10) * 10;
+        const atk_health = (@as(u16, atk_info.health) / 10) * 10;
+        const def_health = (@as(u16, def_info.health) / 10) * 10;
 
         // TODO: Add co lookup
         const co_atk_bonus = 100;
@@ -226,21 +226,27 @@ const obj = struct {
         const base_damage =
             @as(u16, atk_id.attack(def_id)) * co_atk_bonus / 100 + luck;
 
-        // TODO: Get defence!
-        const defense = 1;
+        const defense = blk: {
+            const def_x = ptrs.obj_pos[0][def_num];
+            const def_y = ptrs.obj_pos[1][def_num];
+            const tile = ptrs.map[def_y][def_x];
+            break :blk @as(u16, tile.defense());
+        };
 
         const pre_def_damage = base_damage * atk_health / 100;
 
         const total_damage = pre_def_damage
             * (200 - co_def_bonus - defense * def_health / 10) / 100;
 
-        w4.trace("calc_attack:");
-        w4.tracef("  atk_id: %s", @enumToInt(atk_id));
-        w4.tracef("  def_id: %s", @enumToInt(def_id));
-        w4.tracef("  base_damage: %d", base_damage);
-        w4.tracef("  pre_def_damage: %d", pre_def_damage);
-        w4.tracef("  total_damage: %d", total_damage);
-        assert(0 < total_damage and total_damage < 0x80);
+        if ( !(0 < total_damage and total_damage < 0x80) ) {
+            w4.trace("calc_attack:");
+            w4.tracef("  atk_id: %d", @enumToInt(atk_id));
+            w4.tracef("  def_id: %d", @enumToInt(def_id));
+            w4.tracef("  base_damage: %d", base_damage);
+            w4.tracef("  pre_def_damage: %d", pre_def_damage);
+            w4.tracef("  total_damage: %d", total_damage);
+            unreachable;
+        }
         return @intCast(u7, total_damage);
 
         // Formula 1:
@@ -749,7 +755,7 @@ fn calculate_movable_tiles(num: ObjId) void {
                         len = (len + 1) % q_size;
                         if ( len == next ) {
                             w4.trace("Flood fill: queue overflow!");
-                            assert(false);
+                            unreachable;
                         }
                     }
                 }
@@ -763,7 +769,7 @@ fn calculate_movable_tiles(num: ObjId) void {
             for (queue) |q, i| {
                 w4.tracef("  %d: (%d, %d)", i, q[0], q[1]);
             }
-            assert(false);
+            unreachable;
         }
     }
     ptrs.selected.* = local_selec;
