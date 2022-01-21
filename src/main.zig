@@ -48,14 +48,16 @@ const ptrs = struct {
 
     cursor_pos: *[2]u8,
     cursor_state: *Cursor_State,
-    cursor_menu: *u8,
+    cursor_menu: *Loopable,
 
     selec_offset: *[2]u8,
     selected: *[selected_range][selected_range]?info.Cost,
     selec_obj: *ObjId,
     selec_pos: *[2]u8,
 
-    attacked: *struct{ i: u4, max: u4, },
+    moved_contex: *Moved_Contex,
+
+    attacked: *Loopable,
     attac_buff: *[4]ObjId,
 
     next_obj: *ObjId,
@@ -120,8 +122,31 @@ const Team = u2;
 const Cursor_State = enum(u8) {
     initial = 0,
     selected,
+    moved,
     attack,
     day_menu,
+};
+
+const Loopable = struct{
+    i: u4, max: u4,
+    const Self = @This();
+    fn inc(self: *Self) void {
+        self.*.i = (self.*.i + 1) % self.*.max;
+    }
+    fn dec(self: *Self) void {
+        self.*.i = (self.*.i -% 1 +% self.*.max) % self.*.max;
+    }
+};
+
+const Moved_Contex = packed struct {
+    @"resrv a": bool = false,
+    @"resrv b": bool = false,
+    @"no fire": bool = false,
+    @" fire"  : bool = false,
+    @" unload": bool = false,
+    @" supply": bool = false,
+    @" join"  : bool = false,
+    @" wait"  : bool = false,
 };
 
 const max_health = 100;
@@ -131,6 +156,7 @@ const ObjInfo = struct {
     health: u7,
     team: Team,
     fuel: info.Fuel,
+    transporting: ?ObjId,
 };
 
 const ObjId = u7;
@@ -156,6 +182,7 @@ const obj = struct {
             .health = max_health,
             .team = team,
             .fuel = id.max_fuel(),
+            .transporting = null,
         };
         ptrs.obj_map[y][x] = num;
         ptrs.obj_pos[0][num] = x;
@@ -252,7 +279,7 @@ const obj = struct {
         delete(mvd_num);
     }
 
-    pub fn calc_attack(atk_num: ObjId, def_num: ObjId) u7 {
+    pub fn calc_attack(atk_num: ObjId, def_num: ObjId) !u7 {
         const atk_id = ptrs.obj_id[atk_num];
         const def_id = ptrs.obj_id[def_num];
 
@@ -269,8 +296,12 @@ const obj = struct {
         // TODO: Add luck calculation (0 ~ 9)
         const luck = 0;
 
+        const can_attack = atk_id.attack(def_id);
+        if ( can_attack == null ) {
+            return error.CannotAttack;
+        }
         const base_damage =
-            @as(u16, atk_id.attack(def_id)) * co_atk_bonus / 100 + luck;
+            @as(u16, can_attack.?) * co_atk_bonus / 100 + luck;
 
         const defense = blk: {
             const def_x = ptrs.obj_pos[0][def_num];
@@ -308,14 +339,25 @@ const obj = struct {
         const atk_info = &ptrs.obj_info[atk_num];
         const def_info = &ptrs.obj_info[def_num];
 
-        const atk_damage = calc_attack(atk_num, def_num);
+        const atk_damage = calc_attack(atk_num, def_num)
+            catch |err| switch (err) {
+                error.CannotAttack => {
+                    w4.trace("obj.atack: found error: Cannot Attack");
+                    w4.tracef("atk_num: %d def_num: %d",
+                        atk_num, def_num);
+                    unreachable;
+                },
+        };
 
         var def_health: u7 = undefined;
         if ( !@subWithOverflow(u7, def_info.*.health, atk_damage,
                 &def_health) ) {
             def_info.*.health = @intCast(u7, def_health);
 
-            const def_damage = calc_attack(def_num, atk_num);
+            const def_damage = calc_attack(def_num, atk_num)
+                catch |err| switch (err) {
+                    error.CannotAttack => 0,
+            };
 
             var atk_health: u7 = undefined;
             if ( !@subWithOverflow(u7, atk_info.*.health, def_damage,
@@ -355,16 +397,6 @@ fn new_menu(comptime tag: Cursor_State, texts: []const []const u8) type {
         const block_cnt: u8 = block_cnt;
         const size: u8 = texts.len;
 
-        fn incCursor() void {
-            const c_menu = ptrs.cursor_menu;
-            c_menu.* = (c_menu.* + 1) % size;
-        }
-
-        fn decCursor() void {
-            const c_menu = ptrs.cursor_menu;
-            c_menu.* = (c_menu.* - 1 + size) % size;
-        }
-
         fn name(i: u8) Enum {
             return @intToEnum(Enum, i);
         }
@@ -374,7 +406,7 @@ fn new_menu(comptime tag: Cursor_State, texts: []const []const u8) type {
             const y = @as(i32, ptrs.cursor_pos[1]) * tilespace;
 
             const xa = x + tilespace;
-            const ya = y + 8 * ptrs.cursor_menu.*;
+            const ya = y + 8 * ptrs.cursor_menu.*.i;
             const off = 2;
 
             w4.DRAW_COLORS.* = 0x01;
@@ -471,6 +503,8 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[1] += 1;
             },
+            .moved, .day_menu
+                => ptrs.cursor_menu.inc(),
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -480,7 +514,6 @@ export fn update() void {
                 ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
                 ptrs.attacked.*.i = atk;
             },
-            .day_menu => day_menu.incCursor(),
         }
     } else if ( cursor_pos[1] > 0
         and (pad_diff & w4.BUTTON_UP == w4.BUTTON_UP or timer[1] == 0)
@@ -491,6 +524,8 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[1] -= 1;
             },
+            .moved, .day_menu
+                => ptrs.cursor_menu.dec(),
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -500,7 +535,6 @@ export fn update() void {
                 ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
                 ptrs.attacked.*.i = atk;
             },
-            .day_menu => day_menu.decCursor(),
         }
     }
 
@@ -513,6 +547,7 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[0] += 1;
             },
+            .moved, .day_menu => {},
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -522,7 +557,6 @@ export fn update() void {
                 ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
                 ptrs.attacked.*.i = atk;
             },
-            .day_menu => {},
         }
     } else if ( cursor_pos[0] > 0
         and (pad_diff & w4.BUTTON_LEFT == w4.BUTTON_LEFT or timer[3] == 0)
@@ -533,6 +567,7 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[0] -= 1;
             },
+            .moved, .day_menu => {},
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -542,7 +577,6 @@ export fn update() void {
                 ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
                 ptrs.attacked.*.i = atk;
             },
-            .day_menu => {},
         }
     }
 
@@ -559,7 +593,8 @@ export fn update() void {
 
                     ptrs.cursor_state.* = .selected;
                 } else {
-                    ptrs.cursor_menu.* = 0;
+                    ptrs.cursor_menu.*.i = 0;
+                    ptrs.cursor_menu.*.max = day_menu.size;
                     ptrs.cursor_state.* = .day_menu;
                 }
             },
@@ -567,68 +602,69 @@ export fn update() void {
                 const num = ptrs.selec_obj.*;
                 const this_obj_info = &ptrs.obj_info[num];
                 const team = this_obj_info.team;
-                if ( team == ptrs.curr_team.* ) {
-                    const offset = ptrs.selec_offset;
-                    const obj_x = ptrs.cursor_pos[0];
-                    const obj_y = ptrs.cursor_pos[1];
-                    const old_selec_x = obj_x -% offset[0];
-                    const old_selec_y = obj_y -% offset[1];
-                    if ( old_selec_x < selected_range
-                        and old_selec_y < selected_range
-                        and ptrs.selected[old_selec_y][old_selec_x] != null
-                        ) {
-                        const id = ptrs.obj_id[num];
-                        const should_join =
-                            if ( ptrs.obj_map[obj_y][obj_x] ) |n2|
-                                if ( num != n2
-                                    and id == ptrs.obj_id[n2]
-                                    and this_obj_info.*.health < max_health
-                                ) n2 else null
-                            else null;
-                        if ( should_join ) |n2| {
-                            obj.join(n2, num, id);
-                        } else {
-                            this_obj_info.*.acted = true;
-                            obj.moveTo(num, obj_x, obj_y);
+                const offset = ptrs.selec_offset;
+                const obj_x = ptrs.cursor_pos[0];
+                const obj_y = ptrs.cursor_pos[1];
+                const old_selec_x = obj_x -% offset[0];
+                const old_selec_y = obj_y -% offset[1];
+                if ( team == ptrs.curr_team.*
+                    and old_selec_x < selected_range
+                    and old_selec_y < selected_range
+                    and ptrs.selected[old_selec_y][old_selec_x] != null
+                    ) {
+                    const id = ptrs.obj_id[num];
+                    const should_join =
+                        if ( ptrs.obj_map[obj_y][obj_x] ) |n2|
+                            if ( num != n2
+                                and id == ptrs.obj_id[n2]
+                                and this_obj_info.*.health < max_health
+                            ) n2 else null
+                        else null;
+                    if ( should_join ) |n2| {
+                        obj.join(n2, num, id);
+                    } else {
+                        this_obj_info.*.acted = true;
+                        obj.moveTo(num, obj_x, obj_y);
 
-                            const center = (selected_range - 1) / 2;
-                            offset.*[0] = obj_x -% center;
-                            offset.*[1] = obj_y -% center;
-                            ptrs.selected.* =
-                                .{ .{ null } ** selected_range }
-                                    ** selected_range;
-                            var i: u4 = 0;
-                            const directions = [4][2]u8{
-                                .{ obj_x, obj_y-%1 }, .{ obj_x-%1, obj_y },
-                                .{ obj_x+1, obj_y }, .{ obj_x, obj_y+1 }
-                            };
-                            for ( directions ) |d| {
-                                const dx = d[0];
-                                const dy = d[1];
-                                const sx = dx -% offset[0];
-                                const sy = dy -% offset[1];
-                                if ( dx < map_size_x
-                                    and dy < map_size_y
-                                    and ptrs.obj_map[dy][dx] != null ) {
-                                    const n2 = ptrs.obj_map[dy][dx].?;
-                                    ptrs.selected[sy][sx] = 1;
-                                    ptrs.attac_buff[i] = n2;
-                                    i += 1;
-                                }
-                            }
-                            ptrs.attacked.* = .{ .i = 0, .max = i };
-
-                            if ( i > 0 ) {
-                                const n2 = ptrs.attac_buff[0];
-                                ptrs.cursor_pos[0] = ptrs.obj_pos[0][n2];
-                                ptrs.cursor_pos[1] = ptrs.obj_pos[1][n2];
-                                ptrs.cursor_state.* = .attack;
-                            } else {
-                                ptrs.cursor_state.* = .initial;
+                        const center = (selected_range - 1) / 2;
+                        offset.*[0] = obj_x -% center;
+                        offset.*[1] = obj_y -% center;
+                        ptrs.selected.* =
+                            .{ .{ null } ** selected_range }
+                                ** selected_range;
+                        var i: u4 = 0;
+                        const directions = [4][2]u8{
+                            .{ obj_x, obj_y-%1 }, .{ obj_x-%1, obj_y },
+                            .{ obj_x+1, obj_y }, .{ obj_x, obj_y+1 }
+                        };
+                        for ( directions ) |d| {
+                            const dx = d[0];
+                            const dy = d[1];
+                            const sx = dx -% offset[0];
+                            const sy = dy -% offset[1];
+                            if ( dx < map_size_x
+                                and dy < map_size_y
+                                and ptrs.obj_map[dy][dx] != null ) {
+                                const n2 = ptrs.obj_map[dy][dx].?;
+                                ptrs.selected[sy][sx] = 1;
+                                ptrs.attac_buff[i] = n2;
+                                i += 1;
                             }
                         }
+                        ptrs.attacked.* = .{ .i = 0, .max = i };
+
+                        if ( i > 0 ) {
+                            const n2 = ptrs.attac_buff[0];
+                            ptrs.cursor_pos[0] = ptrs.obj_pos[0][n2];
+                            ptrs.cursor_pos[1] = ptrs.obj_pos[1][n2];
+                        }
                     }
+                    ptrs.cursor_state.* = .moved;
                 }
+            },
+            .moved => {
+                // TODO moved
+                ptrs.cursor_state.* = .initial;
             },
             .attack => {
                 const atk_num = ptrs.selec_obj.*;
@@ -636,7 +672,7 @@ export fn update() void {
                 obj.attack(atk_num, def_num);
                 ptrs.cursor_state.* = .initial;
             },
-            .day_menu => switch ( day_menu.name(ptrs.cursor_menu.*) ) {
+            .day_menu => switch ( day_menu.name(ptrs.cursor_menu.*.i) ) {
                 .@"Cancel"  => ptrs.cursor_state.* = .initial,
                 .@"End Day" => {
                     const curr_team = ptrs.curr_team.*;
@@ -659,6 +695,7 @@ export fn update() void {
         switch ( ptrs.cursor_state.* ) {
             .initial => {},
             .selected => ptrs.cursor_state.* = .initial,
+            .moved => ptrs.cursor_state.* = .selected,
             .attack => {
                 const num = ptrs.selec_obj.*;
                 const old_x = ptrs.selec_pos[0];
@@ -669,7 +706,7 @@ export fn update() void {
 
                 calculate_movable_tiles(num);
 
-                ptrs.cursor_state.* = .selected;
+                ptrs.cursor_state.* = .moved;
             },
             .day_menu => ptrs.cursor_state.* = .initial,
         }
@@ -706,12 +743,17 @@ fn get_obj_num_on_cursor() ?ObjId {
 }
 
 fn calculate_movable_tiles(num: ObjId) void {
-    const team = ptrs.obj_info[num].team;
+    const obj_info = ptrs.obj_info[num];
+    const team = obj_info.team;
     const id = ptrs.obj_id[num];
 
+    const fuel = obj_info.fuel;
     const move_cost = id.move_cost();
     const mv_typ = move_cost.typ;
     const mv_max = move_cost.moves;
+
+    const gas = if ( mv_max < fuel )
+        mv_max else @intCast(u4, fuel);
 
     const center = (selected_range - 1) / 2;
     const selec_x = ptrs.cursor_pos[0] -% center;
@@ -728,7 +770,7 @@ fn calculate_movable_tiles(num: ObjId) void {
     var local_selec: [selected_range][selected_range]?info.Cost =
         .{ .{ null } ** selected_range } ** selected_range;
     queue[0] = .{ center, center };
-    local_selec[center][center] = mv_max;
+    local_selec[center][center] = gas;
 
     while ( len > 0 ) {
         len -= 1;
@@ -775,6 +817,7 @@ fn calculate_movable_tiles(num: ObjId) void {
             w4.tracef("Flood Fill: found null value at pos (%d, %d)",
                 x, y);
             w4.tracef("id: %d, move_max: %d", id, mv_max);
+            w4.tracef("fuel: %d, gas: %d", fuel, gas);
             w4.tracef("len: %d", len);
             w4.trace("queue:");
             for (queue) |q, i| {
@@ -864,7 +907,7 @@ fn draw_map() void {
     }
 
     switch (ptrs.cursor_state.*) {
-        .initial, .day_menu => {},
+        .initial, .moved, .day_menu => {},
         .selected, .attack => {
             const sx = ptrs.selec_offset[0];
             const sy = ptrs.selec_offset[1];
@@ -896,9 +939,53 @@ fn draw_cursor() void {
     switch (ptrs.cursor_state.*) {
         .initial, .selected =>
             blit4(&g.select_q, x, y, 8, 8, 0),
+        .moved => draw_menu(), // TODO moved
         .attack => blit4(&g.select_q, x, y, 8, 8, 4),
         .day_menu => day_menu.draw(),
     }
+}
+
+fn draw_menu() void {
+    const x = @as(i32, ptrs.cursor_pos[0]) * tilespace;
+    const y = @as(i32, ptrs.cursor_pos[1]) * tilespace;
+
+    const xa = x + tilespace;
+    const ya = y + 8 * ptrs.cursor_menu.*.i;
+    const off = 2;
+
+    const size = ptrs.cursor_menu.*.max;
+    assert(size > 0);
+    const ctx = ptrs.moved_contex.*;
+
+    const fields = @typeInfo(Moved_Contex).Struct.fields;
+    comptime var max_len = 0;
+    comptime var texts: [fields.len][]const u8 = undefined;
+    inline for ( fields ) |f, i| {
+        texts[i] = f.name;
+        if ( f.name.len > max_len ) max_len = f.name.len;
+    }
+    const block_cnt = max_len / 2 + 1;
+
+    w4.DRAW_COLORS.* = 0x01;
+    var j: u8 = 0;
+    while ( j < size ) : ( j += 1 ) {
+        var i: u8 = 0;
+        while ( i < block_cnt ) : ( i += 1 ) {
+            blit(&g.square, xa + i * 8, y + j * 8, 8, 8, 0);
+        }
+    }
+    w4.DRAW_COLORS.* = 0x02;
+    var i: u8 = 0;
+    inline for ( texts ) |t| {
+        if ( @field(ctx, t) ) {
+            text(t, xa + off, y + off + @intCast(i32, i) * 8);
+            i += 1;
+        }
+    }
+
+    w4.DRAW_COLORS.* = 0x03;
+    blit(&g.select_thin_q, xa, ya, 8, 8, 0);
+    blit(&g.select_thin_q, xa + 8 * (block_cnt - 1), ya, 8, 8, 6);
 }
 
 fn draw_objs() void {
@@ -944,6 +1031,7 @@ fn draw_objs() void {
                 switch (id) {
                     .infantry => blit(&g.infantry, x, y, 8, 8, 1),
                     .mech     => blit(&g.mech    , x, y, 8, 8, 1),
+                    .apc      => blit(&g.apc     , x, y, 8, 8, 1),
                 }
             }
         }
