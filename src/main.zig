@@ -237,13 +237,16 @@ fn new_menu(comptime tag: Cursor_State, texts: []const []const u8) type {
 }
 
 export fn start() void {
-    // Debug allocated memory
-    w4.tracef("Memory Usage:\n  Allocated:    %d\n  Free for use: %d" ++
-        "\n  Use (%%): %f",
-        @as(i32, @TypeOf(ptrs).alloced_memory),
-        @as(i32, @TypeOf(ptrs).MAXSIZE - @TypeOf(ptrs).alloced_memory),
-        @as(f32, @TypeOf(ptrs).alloced_memory) /
-            @as(f32, @TypeOf(ptrs).MAXSIZE));
+    const debug = @import("builtin").mode == .Debug;
+    if ( debug ) {
+        // Debug allocated memory
+        w4.tracef("Memory Usage:\n  Allocated:    %d\n  Free for use: %d" ++
+            "\n  Use (%%): %f",
+            @as(i32, @TypeOf(ptrs).alloced_memory),
+            @as(i32, @TypeOf(ptrs).MAXSIZE - @TypeOf(ptrs).alloced_memory),
+            @as(f32, @TypeOf(ptrs).alloced_memory) /
+                @as(f32, @TypeOf(ptrs).MAXSIZE));
+    }
 
     // Draw fst frame
     ptrs.redraw.* = true;
@@ -264,17 +267,6 @@ export fn start() void {
 [_]t{.hq, .road, .plains, .city} ++ [_]t{.mountain}**2 ++ [_]t{.woods} ++ [_]t{.plains}**6 ++ [_]t{.woods, .plains},
 [_]t{.plains, .road, .plains, .plains} ++ [_]t{.mountain}**2 ++ [_]t{.plains, .woods, .plains, .city, .city, .plains, .plains, .plains, .woods},
         };
-        // ptrs.map[7][8] = .mountain;
-        // var i: u8 = 0;
-        // var j: u8 = 0;
-        // while ( j < map_size_y ) : ( j += 1 ) {
-        //     i = 0;
-        //     while ( i < map_size_x ) : ( i += 1 ) {
-        //         if ( i == 0 or i == map_size_x-1 or j == 0 or j == map_size_y-1 ) {
-        //             ptrs.map[j][i] = .mountain;
-        //         }
-        //     }
-        // }
     }
     { // Set team count
         ptrs.team_num.* = 2;
@@ -283,27 +275,49 @@ export fn start() void {
         ptrs.obj_map.* = .{ .{ null } ** map_size_x } ** map_size_y;
     }
     { // Put objs
-        const team_num = ptrs.team_num.*;
-        var i: u7 = 0;
-        var j: u8 = 0;
-        while ( j < 20 ) : ( j += 1 ) {
-            const x = (j * 0x5) % (map_size_x - 2) + 1;
-            const y = (j * 0x3) % (map_size_y - 2) + 1;
-            if ( x == 0 or x == map_size_x-1 or y == 0 or y == map_size_y-1 ) {
-            } else {
-                const obj_id = @intToEnum(info.Unity_Id, i % info.Unity_Id.cnt);
-                const team = @intCast(u2, i % team_num);
-                const num = obj.create(obj_id, team, x, y);
-                ptrs.obj_info[num].acted = false;
-                i += 1;
+        const obj_info = ptrs.obj_info;
+
+        const units = [3][3]info.Unity_Id{
+            .{.mech    , .infantry, .apc     , },
+            .{.infantry, .mech    , .infantry, },
+            .{.infantry, .infantry, .mech    , },
+        };
+        const off_x = @intCast(u8, map_size_x - 1        );
+        const off_y = @intCast(u8, map_size_y - units.len);
+        for ( units ) |line, jj| {
+            const j = @intCast(u8, jj);
+            for ( line ) |id, ii| {
+                const i = @intCast(u8, ii);
+                const n0 = obj.create(id, 0, i, off_y + j);
+                obj_info[n0].acted = false;
+
+                const n1 = obj.create(id, 1, off_x - i, j);
+                obj_info[n1].acted = false;
             }
         }
+        // const team_num = ptrs.team_num.*;
+        // var i: u7 = 0;
+        // var j: u8 = 0;
+        // while ( j < 20 ) : ( j += 1 ) {
+        //     const x = (j * 0x5) % (map_size_x - 2) + 1;
+        //     const y = (j * 0x3) % (map_size_y - 2) + 1;
+        //     if ( x == 0 or x == map_size_x-1 or y == 0 or y == map_size_y-1 ) {
+        //     } else {
+        //         const obj_id = @intToEnum(info.Unity_Id, i % info.Unity_Id.cnt);
+        //         const team = @intCast(u2, i % team_num);
+        //         const num = obj.create(obj_id, team, x, y);
+        //         ptrs.obj_info[num].acted = false;
+        //         i += 1;
+        //     }
+        // }
     }
 
     w4.SYSTEM_FLAGS.* = w4.SYSTEM_PRESERVE_FRAMEBUFFER;
 
-    // w4.tone(10, 60, 100, 0);
-    w4.tone(262 | (253 << 16), 60, 30, w4.TONE_PULSE1 | w4.TONE_MODE3);
+    if ( debug ) {
+        // w4.tone(10, 60, 100, 0);
+        w4.tone(262 | (253 << 16), 60, 30, w4.TONE_PULSE1 | w4.TONE_MODE3);
+    }
 }
 
 export fn update() void {
