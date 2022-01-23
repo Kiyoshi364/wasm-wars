@@ -9,19 +9,22 @@ const info = main.info;
 
 const ObjId = main.ObjId;
 const Team = main.Team;
+
 const max_health = main.max_health;
+const team_cnt = main.team_cnt;
+const unity_cap = main.unity_cap;
 
 pub fn create(id: info.Unity_Id, team: Team, x: u8, y: u8) ObjId {
     const num = blk: {
-        const freed_cnt = ptrs.freed_cnt.*;
+        const freed_cnt = ptrs.freed_cnt[team];
         if ( freed_cnt > 0 ) {
-            const num = ptrs.freed_list[freed_cnt - 1];
-            ptrs.freed_cnt.* = freed_cnt - 1;
-            break :blk num;
+            const num = ptrs.freed_list[team][freed_cnt - 1];
+            ptrs.freed_cnt[team] = freed_cnt - 1;
+            break :blk num + team * @as(ObjId, unity_cap);
         } else {
-            const num = ptrs.next_obj.*;
-            ptrs.next_obj.* += 1;
-            break :blk num;
+            const num = ptrs.next_obj[team];
+            ptrs.next_obj[team] += 1;
+            break :blk num + team * @as(ObjId, unity_cap);
         }
     };
     ptrs.obj_id[num] = id;
@@ -44,9 +47,10 @@ pub fn delete(num: ObjId) void {
     ptrs.obj_map[y][x] = null;
 
     // free memory
-    const freed_cnt = ptrs.freed_cnt.*;
-    const list = ptrs.freed_list;
-    const next_obj = ptrs.next_obj.*;
+    const team = num / unity_cap;
+    const freed_cnt = ptrs.freed_cnt[team];
+    const list = &ptrs.freed_list[team];
+    const next_obj = ptrs.next_obj[team];
 
     if ( num == next_obj - 1 ) {
         var unfreed: u7 = 0;
@@ -59,9 +63,9 @@ pub fn delete(num: ObjId) void {
             while ( i < freed_cnt ) : ( i += 1 ) {
                 list[i - unfreed] = list[i];
             }
-            ptrs.freed_cnt.* -= unfreed;
+            ptrs.freed_cnt[team] -= unfreed;
         }
-        ptrs.next_obj.* -= (unfreed + 1);
+        ptrs.next_obj[team] -= (unfreed + 1);
     } else {
         var n = num;
         var i: u7 = 0;
@@ -76,7 +80,21 @@ pub fn delete(num: ObjId) void {
             }
         }
         list[i] = n;
-        ptrs.freed_cnt.* = freed_cnt + 1;
+        ptrs.freed_cnt[team] = freed_cnt + 1;
+    }
+
+    if ( ptrs.next_obj[team] == team * unity_cap ) {
+        var i: u2 = team_cnt;
+        for ( ptrs.next_obj ) |army_cnt| {
+            if ( army_cnt == 0 ) i -= 1;
+        }
+        if ( i == 1 ) {
+            ptrs.game_state.* = switch ( team ) {
+                0 => .army0,
+                1 => .army1,
+                else => .army0,
+            };
+        }
     }
 }
 

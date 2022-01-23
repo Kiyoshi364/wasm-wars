@@ -17,7 +17,9 @@ const screen_tiles_y =
     if (screen_tiles_x < map_size_y) screen_tiles_x else map_size_y;
 
 // Objs / Things
-const obj_cnt = 100;
+pub const team_cnt = 2;
+pub const unity_cap = 50;
+const obj_cnt = unity_cap * team_cnt;
 
 // selection
 const selected_range = 19;
@@ -37,13 +39,14 @@ pub const ptrs = struct {
     gpads_timer: *[4][4]u4,
 
     redraw: *bool,
+    game_state: *Game_State,
 
     map: *[map_size_y][map_size_x]info.Map_Tile,
     cam: *[2]u8,
 
     curr_day: *u8,
     curr_team: *Team,
-    team_num: *Team,
+    team_cnt: *Team,
 
     cursor_pos: *[2]u8,
     cursor_state: *Cursor_State,
@@ -63,14 +66,14 @@ pub const ptrs = struct {
     attacked: *Loopable,
     attac_buff: *[4]ObjId,
 
-    next_obj: *ObjId,
+    next_obj: *[team_cnt]ObjId,
     obj_id: *[obj_cnt]info.Unity_Id,
     obj_info: *[obj_cnt]ObjInfo,
     obj_pos: *[2][obj_cnt]u8,
     obj_map: *[map_size_y][map_size_x]?ObjId,
 
-    freed_cnt: *ObjId,
-    freed_list: *[obj_cnt]ObjId,
+    freed_cnt: *[team_cnt]ObjId,
+    freed_list: *[team_cnt][unity_cap]ObjId,
 
     const Self = @This();
     const std = @import("std");
@@ -121,6 +124,10 @@ pub const ptrs = struct {
 }.init();
 
 pub const Team = u2;
+
+const Game_State = enum {
+    game, army0, army1,
+};
 
 const Cursor_State = enum(u8) {
     initial = 0,
@@ -248,6 +255,9 @@ export fn start() void {
                 @as(f32, @TypeOf(ptrs).MAXSIZE));
     }
 
+    // Game
+    ptrs.game_state.* = .game;
+
     // Draw fst frame
     ptrs.redraw.* = true;
 
@@ -269,12 +279,15 @@ export fn start() void {
         };
     }
     { // Set team count
-        ptrs.team_num.* = 2;
+        ptrs.team_cnt.* = 2;
     }
     { // obj_map inicialization
         ptrs.obj_map.* = .{ .{ null } ** map_size_x } ** map_size_y;
     }
     { // Put objs
+        ptrs.next_obj.* = [_]ObjId{ 0 } ** team_cnt;
+        ptrs.freed_cnt.* = [_]ObjId{ 0 } ** team_cnt;
+
         const obj_info = ptrs.obj_info;
 
         const units = [3][3]info.Unity_Id{
@@ -282,20 +295,21 @@ export fn start() void {
             .{.infantry, .mech    , .infantry, },
             .{.infantry, .infantry, .mech    , },
         };
-        const off_x = @intCast(u8, map_size_x - 1        );
-        const off_y = @intCast(u8, map_size_y - units.len);
+        const off0  = @intCast(u8, map_size_y - units.len);
+        const off1x = @intCast(u8, map_size_x - 1        );
+        const off1y = @intCast(u8, units.len  - 1        );
         for ( units ) |line, jj| {
             const j = @intCast(u8, jj);
             for ( line ) |id, ii| {
                 const i = @intCast(u8, ii);
-                const n0 = obj.create(id, 0, i, off_y + j);
+                const n0 = obj.create(id, 0, i, off0 + j);
                 obj_info[n0].acted = false;
 
-                const n1 = obj.create(id, 1, off_x - i, j);
+                const n1 = obj.create(id, 1, off1x - i, off1y - j);
                 obj_info[n1].acted = false;
             }
         }
-        // const team_num = ptrs.team_num.*;
+        // const team_cnt = ptrs.team_cnt.*;
         // var i: u7 = 0;
         // var j: u8 = 0;
         // while ( j < 20 ) : ( j += 1 ) {
@@ -304,7 +318,7 @@ export fn start() void {
         //     if ( x == 0 or x == map_size_x-1 or y == 0 or y == map_size_y-1 ) {
         //     } else {
         //         const obj_id = @intToEnum(info.Unity_Id, i % info.Unity_Id.cnt);
-        //         const team = @intCast(u2, i % team_num);
+        //         const team = @intCast(u2, i % team_cnt);
         //         const num = obj.create(obj_id, team, x, y);
         //         ptrs.obj_info[num].acted = false;
         //         i += 1;
@@ -438,7 +452,9 @@ export fn update() void {
     if ( pad_diff & w4.BUTTON_1 == w4.BUTTON_1
             and pad_new & w4.BUTTON_1 == w4.BUTTON_1 ) {
         ptrs.redraw.* = true;
-        switch ( ptrs.cursor_state.* ) {
+        if ( ptrs.game_state.* != .game) {
+            start();
+        } else switch ( ptrs.cursor_state.* ) {
             .initial => {
                 const n: ?ObjId = get_obj_num_on_cursor();
 
@@ -698,6 +714,7 @@ export fn update() void {
                 const n2_x = ptrs.cursor_pos[0];
                 const n2_y = ptrs.cursor_pos[1];
                 obj.moveTo(n2, n2_x, n2_y);
+                ptrs.obj_info[num].transporting = null;
                 ptrs.obj_info[num].acted = true;
                 ptrs.obj_info[n2].acted = true;
                 ptrs.cursor_state.* = .initial;
@@ -714,7 +731,7 @@ export fn update() void {
                     const curr_team = ptrs.curr_team.*;
 
                     reset_acted(curr_team);
-                    const next_team = (curr_team + 1) % ptrs.team_num.*;
+                    const next_team = (curr_team + 1) % ptrs.team_cnt.*;
                     ptrs.curr_team.* = next_team;
                     if ( next_team < curr_team ) {
                         ptrs.curr_day.* += 1;
@@ -770,7 +787,11 @@ export fn update() void {
     for (timer) |*t| if ( t.* > 0 ) { t.* -= 1; };
 
     if ( ptrs.redraw.* ) {
-        draw();
+        const state = ptrs.game_state.*;
+        switch ( state ) {
+            .game => draw(),
+            .army0, .army1 => draw_winner(state),
+        }
         ptrs.redraw.* = false;
     }
 }
@@ -898,6 +919,7 @@ fn reset_acted(team: Team) void {
 }
 
 fn turn_start(team: Team) void {
+    // Resupply, earn money, repair ...
     _ = team;
 }
 
@@ -1153,6 +1175,43 @@ fn draw_objs() void {
         }
     }
 
+}
+
+fn draw_winner(state: Game_State) void {
+    const x = (screen_tiles_x / 2 - 2) * tilespace;
+    const y = screen_tiles_y / 2 * tilespace;
+    switch ( state ) {
+        .game => {
+            w4.trace("draw_menu: receaved unreachable state");
+            unreachable;
+        },
+        .army0 => {
+            w4.DRAW_COLORS.* = 0x01;
+            var i: u8 = 0;
+            while ( i < 7 ) : ( i += 1 ) {
+                blit(&g.square, x + i * 8, y - 2, 8, 8, 0);
+            }
+            w4.DRAW_COLORS.* = 0x03;
+            text("Green Army Win", x, y);
+        },
+        .army1 => {
+            w4.DRAW_COLORS.* = 0x01;
+            var i: u8 = 0;
+            while ( i < 7 ) : ( i += 1 ) {
+                blit(&g.square, x + i * 8, y - 2, 8, 8, 0);
+            }
+            w4.DRAW_COLORS.* = 0x04;
+            text("Black Army Win", x, y);
+        },
+    }
+
+    w4.DRAW_COLORS.* = 0x01;
+    var i: u8 = 0;
+    while ( i < 9 ) : ( i += 1 ) {
+        blit(&g.square, x + i * 8 - 8, y + 14, 8, 8, 0);
+    }
+    w4.DRAW_COLORS.* = 0x04;
+    text("Press X to restart", x - 8, y + 16);
 }
 
 fn rect(x: i32, y: i32, width: u32, height: u32) void {
