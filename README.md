@@ -6,7 +6,7 @@ A Advance Wars Clone made for the [wasm4 Fantasy Console](https://wasm4.org).
 
 If you only want to play the game in your brouser consider [this link](https://shikiyo364.itch.io/wasm-wars).
 Note ``zig`` is used to build the game (how to install: [site](https://ziglang.org/learn/getting-started/#installing-zig) [github](https://github.com/ziglang/zig/wiki/Building-Zig-From-Source)).
-Also ``w4`` is necessary to run/or bundle the game.
+Also ``w4`` is necessary to run/or bundle the game (how to install: [site](https://wasm4.org/docs/getting-started/setup)).
 
 To build the game:
 ```console
@@ -31,7 +31,7 @@ w4 bundle zig-out/lib/cart.wasm --html index.html
 
 # How to Play (Instructions)
 
- - If you are familiar to Advance Wars use *Keyboard X* as *Button A* and *Keyboard C/Z* as *Button B*.
+ - If you are familiar to Advance Wars use *Keyboard X* as *Button A* and *Keyboard Z/C* as *Button B*.
 
  - Use arrows to move your cursor, *X* as yes/select and *Z/C* as no.
 
