@@ -1053,13 +1053,13 @@ fn draw_objs() void {
                 const health = obj_info.health / 10 + 1;
                 w4.DRAW_COLORS.* = 0x0004;
                 if ( health <= 10 ) {
-                    w4.rect(x - 1, y - 1, health, 1);
+                    rect(x - 1, y - 1, health, 1);
                     if ( health > 6 ) {
                         w4.DRAW_COLORS.* = 0x0003;
-                        w4.rect(x - 1 + 4, y - 1, 2, 1);
+                        rect(x - 1 + 4, y - 1, 2, 1);
                     } else if ( health == 5 ) {
                         w4.DRAW_COLORS.* = 0x0003;
-                        w4.rect(x - 1 + 4, y - 1, 1, 1);
+                        rect(x - 1 + 4, y - 1, 1, 1);
                     }
                 }
 
@@ -1089,6 +1089,12 @@ fn draw_objs() void {
         }
     }
 
+}
+
+fn rect(x: i32, y: i32, width: u32, height: u32) void {
+    w4.rect(x - @as(i32, ptrs.cam[0]) * tilespace,
+            y - @as(i32, ptrs.cam[1]) * tilespace,
+            width, height);
 }
 
 fn blit(sprite: [*]const u8, x: i32, y: i32,
