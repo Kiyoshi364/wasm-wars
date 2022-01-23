@@ -114,6 +114,15 @@ pub const Unity_Id = enum {
             .apc => null,
         };
     }
+
+    pub fn name_len(self: Self) usize {
+        const lookup = @typeInfo(Self).Enum.fields;
+        return switch ( self ) {
+            .infantry => lookup[@enumToInt(@as(Self, .infantry))].name.len,
+            .mech     => lookup[@enumToInt(@as(Self, .mech    ))].name.len,
+            .apc      => lookup[@enumToInt(@as(Self, .apc     ))].name.len,
+        };
+    }
 };
 
 pub const Move_Type = enum {

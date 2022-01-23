@@ -1,6 +1,7 @@
 const assert = @import("std").debug.assert;
 
 const w4 = @import("wasm4.zig");
+const utils = @import("utils.zig");
 
 const g = @import("graphics.zig");
 const info = @import("simple_info.zig");
@@ -56,6 +57,10 @@ const ptrs = struct {
     selec_pos: *[2]u8,
 
     moved_contex: *Moved_Contex,
+
+    unloaded_menu: *Loopable,
+    unloaded: *Loopable,
+    unloaded_buff: *[4][2]u8,
 
     attacked: *Loopable,
     attac_buff: *[4]ObjId,
@@ -123,6 +128,8 @@ const Cursor_State = enum(u8) {
     initial = 0,
     selected,
     moved,
+    unload_menu,
+    unload,
     attack,
     day_menu,
 };
@@ -140,21 +147,30 @@ const Loopable = struct{
 
 const Moved_Contex = packed struct {
     @"resrv a": bool = false,
-    @"resrv b": bool = false,
     @"no fire": bool = false,
-    @" fire"  : bool = false,
-    @" unload": bool = false,
-    @" supply": bool = false,
-    @" join"  : bool = false,
-    @" wait"  : bool = false,
+    @"fire"   : bool = false,
+    @"unload" : bool = false,
+    @"supply" : bool = false,
+    @"join"   : bool = false,
+    @"load"   : bool = false,
+    @"wait"   : bool = false,
 };
+
+fn MvdCtxEnum() type {
+    const fields = @typeInfo(Moved_Contex).Struct.fields;
+    comptime var texts: [fields.len][]const u8 = undefined;
+    inline for ( fields ) |f, i| {
+        texts[i] = f.name;
+    }
+    return createEnum(&texts);
+}
 
 const max_health = 100;
 
 const ObjInfo = struct {
     acted: bool,
-    health: u7,
     team: Team,
+    health: u7,
     fuel: info.Fuel,
     transporting: ?ObjId,
 };
@@ -245,6 +261,12 @@ const obj = struct {
         ptrs.obj_pos[1][num] = y;
     }
 
+    pub fn supply(num: ObjId) void {
+        const id = ptrs.obj_id[num];
+        const this_obj_info = &ptrs.obj_info[num];
+        this_obj_info.*.fuel = id.max_fuel();
+    }
+
     pub fn join(num: ObjId, mvd_num: ObjId, id: info.Unity_Id) void {
         if ( num == mvd_num ) {
             w4.trace("obj.join: same obj_ids");
@@ -263,18 +285,31 @@ const obj = struct {
         const obj_info = &ptrs.obj_info[num];
         const mvd_info = &ptrs.obj_info[mvd_num];
 
-        obj_info.*.acted = true;
-        obj_info.*.health =
-            ( obj_info.health + mvd_info.health ) % max_health;
-        obj_info.*.fuel =
-            ( obj_info.fuel + mvd_info.fuel ) % id.max_fuel();
-
         if ( obj_info.team != mvd_info.team ) {
             w4.trace("obj.join: team differ");
             w4.tracef("num team: %d moved team: %d",
                 obj_info.team, mvd_info.team);
             unreachable;
         }
+
+        if ( obj_info.transporting != null
+            or mvd_info.transporting != null ) {
+            w4.trace("obj.join: both are transporting something");
+            w4.tracef("num team: %d moved team: %d",
+                obj_info.team, mvd_info.team);
+            unreachable;
+        }
+
+        obj_info.* = .{
+            .acted = true,
+            .team = obj_info.team,
+            .health = utils.min(u7,
+                obj_info.health +| mvd_info.health, max_health),
+            .fuel = utils.min(u7,
+                obj_info.fuel +| mvd_info.fuel, id.max_fuel()),
+            .transporting = obj_info.transporting
+                orelse mvd_info.transporting orelse null,
+        };
 
         delete(mvd_num);
     }
@@ -315,7 +350,7 @@ const obj = struct {
         const total_damage = pre_def_damage
             * (200 - co_def_bonus - defense * def_health / 10) / 100;
 
-        if ( !(0 < total_damage and total_damage < 0x80) ) {
+        if ( !(0 <= total_damage and total_damage < 0x80) ) {
             w4.trace("calc_attack:");
             w4.tracef("  atk_id: %d", @enumToInt(atk_id));
             w4.tracef("  def_id: %d", @enumToInt(def_id));
@@ -369,29 +404,35 @@ const obj = struct {
         } else {
             obj.delete(def_num);
         }
+
+        ptrs.obj_info[atk_num].acted = true;
     }
 };
 
-fn new_menu(comptime tag: Cursor_State, texts: []const []const u8) type {
+fn createEnum(texts: []const[]const u8) type {
     const TP = @import("std").builtin.TypeInfo;
     const EF = TP.EnumField;
     const Decl = TP.Declaration;
     const decls = [0]Decl{};
 
-    comptime var max_len: u8 = 0;
     comptime var enum_f: [texts.len]EF = undefined;
     inline for ( texts ) |t, i| {
         enum_f[i] = .{ .name = t, .value = i, };
-        if ( t.len > max_len )
-            max_len = t.len;
     }
-    const block_cnt = max_len / 2 + 1;
-    const Enum = @Type(.{ .Enum = .{
+    return @Type(.{ .Enum = .{
         .layout = .Auto, .tag_type = u8, .fields = &enum_f,
         .decls = &decls, .is_exhaustive = true,
     } });
+}
+
+fn new_menu(comptime tag: Cursor_State, texts: []const []const u8) type {
+    comptime var max_len: u8 = 0;
+    inline for ( texts ) |t| {
+        if ( t.len > max_len ) max_len = t.len;
+    }
+    const block_cnt = max_len / 2 + 1;
     return struct {
-        const Enum: type = Enum;
+        const Enum: type = createEnum(texts);
         const tag: Cursor_State = tag;
         const texts: [][]const u8 = texts;
         const block_cnt: u8 = block_cnt;
@@ -503,8 +544,13 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[1] += 1;
             },
-            .moved, .day_menu
-                => ptrs.cursor_menu.inc(),
+            .moved, .day_menu => ptrs.cursor_menu.inc(),
+            .unload_menu => ptrs.unloaded_menu.inc(),
+            .unload => {
+                ptrs.unloaded.inc();
+                const i = ptrs.unloaded.*.i;
+                ptrs.cursor_pos.* = ptrs.unloaded_buff[i];
+            },
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -524,8 +570,13 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[1] -= 1;
             },
-            .moved, .day_menu
-                => ptrs.cursor_menu.dec(),
+            .moved, .day_menu => ptrs.cursor_menu.dec(),
+            .unload_menu => ptrs.cursor_menu.dec(),
+            .unload => {
+                ptrs.unloaded.dec();
+                const i = ptrs.unloaded.*.i;
+                ptrs.cursor_pos.* = ptrs.unloaded_buff[i];
+            },
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -547,7 +598,12 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[0] += 1;
             },
-            .moved, .day_menu => {},
+            .moved, .unload_menu, .day_menu => {},
+            .unload => {
+                ptrs.unloaded.inc();
+                const i = ptrs.unloaded.*.i;
+                ptrs.cursor_pos.* = ptrs.unloaded_buff[i];
+            },
             .attack => {
                 const i = ptrs.attacked.*.i;
                 const max = ptrs.attacked.*.max;
@@ -567,15 +623,18 @@ export fn update() void {
             .initial, .selected => {
                 cursor_pos[0] -= 1;
             },
-            .moved, .day_menu => {},
+            .moved, .unload_menu, .day_menu => {},
+            .unload => {
+                ptrs.unloaded.dec();
+                const i = ptrs.unloaded.*.i;
+                ptrs.cursor_pos.* = ptrs.unloaded_buff[i];
+            },
             .attack => {
-                const i = ptrs.attacked.*.i;
-                const max = ptrs.attacked.*.max;
-                const atk = ( i -% 1 +% max ) % max;
+                ptrs.attacked.dec();
+                const atk = ptrs.attacked.*.i;
                 const num = ptrs.attac_buff[atk];
                 ptrs.cursor_pos[0] = ptrs.obj_pos[0][num];
                 ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
-                ptrs.attacked.*.i = atk;
             },
         }
     }
@@ -593,49 +652,99 @@ export fn update() void {
 
                     ptrs.cursor_state.* = .selected;
                 } else {
-                    ptrs.cursor_menu.*.i = 0;
-                    ptrs.cursor_menu.*.max = day_menu.size;
+                    ptrs.cursor_menu.* = .{ .i = 0, .max = day_menu.size };
                     ptrs.cursor_state.* = .day_menu;
                 }
             },
             .selected => {
+                ptrs.moved_contex.* = .{};
+                var menu_max: u4 = 0;
                 const num = ptrs.selec_obj.*;
                 const this_obj_info = &ptrs.obj_info[num];
                 const team = this_obj_info.team;
                 const offset = ptrs.selec_offset;
-                const obj_x = ptrs.cursor_pos[0];
-                const obj_y = ptrs.cursor_pos[1];
-                const old_selec_x = obj_x -% offset[0];
-                const old_selec_y = obj_y -% offset[1];
+                const old_x = ptrs.obj_pos[0][num];
+                const old_y = ptrs.obj_pos[1][num];
+                const new_x = ptrs.cursor_pos[0];
+                const new_y = ptrs.cursor_pos[1];
+                const old_selec_x = new_x -% offset[0];
+                const old_selec_y = new_y -% offset[1];
                 if ( team == ptrs.curr_team.*
                     and old_selec_x < selected_range
                     and old_selec_y < selected_range
                     and ptrs.selected[old_selec_y][old_selec_x] != null
                     ) {
                     const id = ptrs.obj_id[num];
+                    const is_transporting =
+                        this_obj_info.transporting != null;
+                    const is_empty = ptrs.obj_map[new_y][new_x] == null
+                        or ptrs.obj_map[new_y][new_x].? == num;
                     const should_join =
-                        if ( ptrs.obj_map[obj_y][obj_x] ) |n2|
+                        if ( ptrs.obj_map[new_y][new_x] ) |n2|
                             if ( num != n2
                                 and id == ptrs.obj_id[n2]
-                                and this_obj_info.*.health < max_health
-                            ) n2 else null
-                        else null;
-                    if ( should_join ) |n2| {
-                        obj.join(n2, num, id);
-                    } else {
-                        this_obj_info.*.acted = true;
-                        obj.moveTo(num, obj_x, obj_y);
+                                and (this_obj_info.*.health < max_health
+                                    or ptrs.obj_info[n2].health < max_health)
+                            ) true else false
+                        else false;
+                    const should_load =
+                        if ( ptrs.obj_map[new_y][new_x] ) |n2|
+                            if ( num != n2
+                                and ptrs.obj_id[n2].may_transport(id)
+                            ) true else false
+                        else false;
+                    if ( is_transporting and is_empty) {
+                        menu_max += 1;
+                        ptrs.moved_contex.*.unload = true;
+                    }
+                    if ( id == .apc and is_empty ) {
+                        obj.moveTo(num, new_x, new_y);
+                        const directions = [4][2]u8{
+                            .{ new_x, new_y-%1 }, .{ new_x-%1, new_y },
+                            .{ new_x+1, new_y }, .{ new_x, new_y+1 }
+                        };
+                        for ( directions ) |d| {
+                            const dx = d[0];
+                            const dy = d[1];
+                            if ( dx < map_size_x
+                                and dy < map_size_y
+                                and ptrs.obj_map[dy][dx] != null ) {
+                                const n2 = ptrs.obj_map[dy][dx].?;
+                                if ( team == ptrs.obj_info[n2].team ) {
+                                    menu_max += 1;
+                                    ptrs.moved_contex.*.supply = true;
+                                }
+                            }
+                        }
+                        menu_max += 1;
+                        ptrs.moved_contex.*.wait = true;
+                        ptrs.cursor_menu.* = .{ .i = 0, .max = menu_max };
+                        ptrs.cursor_state.* = .moved;
+                    } else if ( should_join ) {
+                        ptrs.obj_map[old_y][old_x] = null;
+                        menu_max += 1;
+                        ptrs.moved_contex.*.join = true;
+                        ptrs.cursor_menu.* = .{ .i = 0, .max = menu_max };
+                        ptrs.cursor_state.* = .moved;
+                    } else if ( should_load ) {
+                        ptrs.obj_map[old_y][old_x] = null;
+                        menu_max += 1;
+                        ptrs.moved_contex.*.load = true;
+                        ptrs.cursor_menu.* = .{ .i = 0, .max = menu_max };
+                        ptrs.cursor_state.* = .moved;
+                    } else if ( is_empty ) {
+                        obj.moveTo(num, new_x, new_y);
 
                         const center = (selected_range - 1) / 2;
-                        offset.*[0] = obj_x -% center;
-                        offset.*[1] = obj_y -% center;
+                        offset.*[0] = new_x -% center;
+                        offset.*[1] = new_y -% center;
                         ptrs.selected.* =
                             .{ .{ null } ** selected_range }
                                 ** selected_range;
                         var i: u4 = 0;
                         const directions = [4][2]u8{
-                            .{ obj_x, obj_y-%1 }, .{ obj_x-%1, obj_y },
-                            .{ obj_x+1, obj_y }, .{ obj_x, obj_y+1 }
+                            .{ new_x, new_y-%1 }, .{ new_x-%1, new_y },
+                            .{ new_x+1, new_y }, .{ new_x, new_y+1 }
                         };
                         for ( directions ) |d| {
                             const dx = d[0];
@@ -646,25 +755,113 @@ export fn update() void {
                                 and dy < map_size_y
                                 and ptrs.obj_map[dy][dx] != null ) {
                                 const n2 = ptrs.obj_map[dy][dx].?;
-                                ptrs.selected[sy][sx] = 1;
-                                ptrs.attac_buff[i] = n2;
-                                i += 1;
+                                const id2 = ptrs.obj_id[n2];
+                                if ( team != ptrs.obj_info[n2].team
+                                    and id.attack(id2) != null ) {
+                                    ptrs.selected[sy][sx] = 1;
+                                    ptrs.attac_buff[i] = n2;
+                                    i += 1;
+                                }
                             }
                         }
                         ptrs.attacked.* = .{ .i = 0, .max = i };
 
                         if ( i > 0 ) {
-                            const n2 = ptrs.attac_buff[0];
-                            ptrs.cursor_pos[0] = ptrs.obj_pos[0][n2];
-                            ptrs.cursor_pos[1] = ptrs.obj_pos[1][n2];
+                            menu_max += 1;
+                            ptrs.moved_contex.*.fire = true;
                         }
+                        menu_max += 1;
+                        ptrs.moved_contex.*.wait = true;
+                        ptrs.cursor_menu.* = .{ .i = 0, .max = menu_max };
+                        ptrs.cursor_state.* = .moved;
                     }
-                    ptrs.cursor_state.* = .moved;
                 }
             },
             .moved => {
-                // TODO moved
-                ptrs.cursor_state.* = .initial;
+                const ctx = ptrs.moved_contex;
+                var cnt: u4 = ptrs.cursor_menu.*.i;
+                const fields = @typeInfo(Moved_Contex).Struct.fields;
+                const chosen = inline for ( fields ) |f, i| {
+                    if ( @field(ctx, f.name) ) {
+                        if ( cnt == 0 )
+                            break @intToEnum(MvdCtxEnum(), i);
+                        cnt -= 1;
+                    }
+                };
+                switch ( chosen ) {
+                    .@"resrv a", => {
+                        w4.tracef("moved_context reached an"
+                            ++ "unreachable state: %s", chosen);
+                        unreachable;
+                    },
+                    .@"no fire", => {
+                        w4.trace("no fire: \"not\" implemented");
+                        w4.trace("(Yes, it should actually do nothing!)");
+                    },
+                    .@"fire",    => {
+                        const num = ptrs.attac_buff[0];
+                        ptrs.cursor_pos[0] = ptrs.obj_pos[0][num];
+                        ptrs.cursor_pos[1] = ptrs.obj_pos[1][num];
+                        ptrs.cursor_state.* = .attack;
+                    },
+                    .@"unload",  => {
+                        ptrs.unloaded_menu.* = .{ .i = 0, .max = 1 };
+                        ptrs.cursor_state.* = .unload_menu;
+                    },
+                    .@"supply",  => {
+                        const num = ptrs.selec_obj.*;
+                        const x = ptrs.obj_pos[0][num];
+                        const y = ptrs.obj_pos[1][num];
+                        const team = ptrs.obj_info[num].team;
+                        const directions = [4][2]u8{
+                            .{ x, y-%1 }, .{ x-%1, y },
+                            .{ x+1, y }, .{ x, y+1 }
+                        };
+                        for ( directions ) |d| {
+                            const dx = d[0];
+                            const dy = d[1];
+                            if ( dx < map_size_x
+                                and dy < map_size_y
+                                and ptrs.obj_map[dy][dx] != null ) {
+                                const n2 = ptrs.obj_map[dy][dx].?;
+                                if ( team == ptrs.obj_info[n2].team ) {
+                                    obj.supply(n2);
+                                }
+                            }
+                        }
+                        ptrs.obj_info[num].acted = true;
+                        ptrs.cursor_state.* = .initial;
+                    },
+                    .@"join",  => {
+                        const num = ptrs.selec_obj.*;
+                        const id = ptrs.obj_id[num];
+                        const x = ptrs.cursor_pos[0];
+                        const y = ptrs.cursor_pos[1];
+                        const n2 = ptrs.obj_map[y][x].?;
+                        obj.join(n2, num, id);
+                        ptrs.cursor_state.* = .initial;
+                    },
+                    .@"load",  => {
+                        const num = ptrs.selec_obj.*;
+                        const x = ptrs.cursor_pos[0];
+                        const y = ptrs.cursor_pos[1];
+                        const n2 = ptrs.obj_map[y][x].?;
+                        ptrs.obj_info[n2].transporting = num;
+                        ptrs.obj_info[num].acted = true;
+                        ptrs.cursor_state.* = .initial;
+                    },
+                    .@"wait",    => {
+                        const num = ptrs.selec_obj.*;
+                        ptrs.obj_info[num].acted = true;
+                        ptrs.cursor_state.* = .initial;
+                    },
+                }
+            },
+            .unload_menu => {
+                // TODO: unload_menu
+            },
+            .unload => {
+                // TODO: unload
             },
             .attack => {
                 const atk_num = ptrs.selec_obj.*;
@@ -695,8 +892,7 @@ export fn update() void {
         switch ( ptrs.cursor_state.* ) {
             .initial => {},
             .selected => ptrs.cursor_state.* = .initial,
-            .moved => ptrs.cursor_state.* = .selected,
-            .attack => {
+            .moved => {
                 const num = ptrs.selec_obj.*;
                 const old_x = ptrs.selec_pos[0];
                 const old_y = ptrs.selec_pos[1];
@@ -706,8 +902,11 @@ export fn update() void {
 
                 calculate_movable_tiles(num);
 
-                ptrs.cursor_state.* = .moved;
+                ptrs.cursor_state.* = .selected;
             },
+            .unload_menu => ptrs.cursor_state.* = .moved,
+            .unload => ptrs.cursor_state.* = .unload_menu,
+            .attack => ptrs.cursor_state.* = .moved,
             .day_menu => ptrs.cursor_state.* = .initial,
         }
     }
@@ -907,8 +1106,8 @@ fn draw_map() void {
     }
 
     switch (ptrs.cursor_state.*) {
-        .initial, .moved, .day_menu => {},
-        .selected, .attack => {
+        .initial, .moved, .unload_menu, .day_menu => {},
+        .selected, .unload, .attack => {
             const sx = ptrs.selec_offset[0];
             const sy = ptrs.selec_offset[1];
             for ( ptrs.selected ) |line, jj| {
@@ -936,16 +1135,17 @@ fn draw_cursor() void {
     const y = @as(i32, ptrs.cursor_pos[1]) * tilespace;
     w4.DRAW_COLORS.* = 0x03;
 
-    switch (ptrs.cursor_state.*) {
-        .initial, .selected =>
+    const state = ptrs.cursor_state.*;
+    switch ( state ) {
+        .initial, .selected, .unload =>
             blit4(&g.select_q, x, y, 8, 8, 0),
-        .moved => draw_menu(), // TODO moved
+        .moved, .unload_menu => draw_menu(state),
         .attack => blit4(&g.select_q, x, y, 8, 8, 4),
         .day_menu => day_menu.draw(),
     }
 }
 
-fn draw_menu() void {
+fn draw_menu(state: Cursor_State) void {
     const x = @as(i32, ptrs.cursor_pos[0]) * tilespace;
     const y = @as(i32, ptrs.cursor_pos[1]) * tilespace;
 
@@ -953,19 +1153,66 @@ fn draw_menu() void {
     const ya = y + 8 * ptrs.cursor_menu.*.i;
     const off = 2;
 
-    const size = ptrs.cursor_menu.*.max;
-    assert(size > 0);
     const ctx = ptrs.moved_contex.*;
 
-    const fields = @typeInfo(Moved_Contex).Struct.fields;
-    comptime var max_len = 0;
-    comptime var texts: [fields.len][]const u8 = undefined;
-    inline for ( fields ) |f, i| {
-        texts[i] = f.name;
-        if ( f.name.len > max_len ) max_len = f.name.len;
-    }
-    const block_cnt = max_len / 2 + 1;
+    const block_cnt = switch ( state ) {
+        .initial, .selected, .unload, .attack, .day_menu, => {
+            w4.trace("draw_menu: receaved unreachable state");
+            unreachable;
+        },
+        .moved => blk: {
+            const fields = @typeInfo(Moved_Contex).Struct.fields;
+            comptime var max_len = 0;
+            comptime var texts: [fields.len][]const u8 = undefined;
+            inline for ( fields ) |f, i| {
+                texts[i] = f.name;
+                if ( f.name.len > max_len ) max_len = f.name.len;
+            }
 
+            const size = ptrs.cursor_menu.*.max;
+            const block_cnt = max_len / 2 + 1;
+
+            draw_menu_back(xa, y, size, block_cnt);
+            w4.DRAW_COLORS.* = 0x02;
+            var i: u8 = 0;
+            inline for ( texts ) |t| {
+                if ( @field(ctx, t) ) {
+                    text(t, xa + off, y + off + @intCast(i32, i) * 8);
+                    i += 1;
+                }
+            }
+
+            break :blk block_cnt;
+        },
+        .unload_menu => blk: {
+            const num = ptrs.selec_obj.*;
+            const n2 = ptrs.obj_info[num].transporting.?;
+            const id = ptrs.obj_id[n2];
+
+            const size = ptrs.unloaded_menu.*.max;
+
+            const name_len = @intCast(u8, id.name_len());
+            const block_cnt = name_len / 2 + 1;
+
+            draw_menu_back(xa, y, size, block_cnt);
+
+            w4.DRAW_COLORS.* = 0x02;
+            switch ( id ) {
+                .infantry => text("infantry", xa + off, y + off),
+                .mech     => text("mech"    , xa + off, y + off),
+                .apc      => text("apc"     , xa + off, y + off),
+            }
+
+            break :blk block_cnt;
+        },
+    };
+
+    w4.DRAW_COLORS.* = 0x03;
+    blit(&g.select_thin_q, xa, ya, 8, 8, 0);
+    blit(&g.select_thin_q, xa + 8 * (block_cnt - 1), ya, 8, 8, 6);
+}
+
+fn draw_menu_back(xa: i32, y: i32, size: u8, block_cnt: u8) void {
     w4.DRAW_COLORS.* = 0x01;
     var j: u8 = 0;
     while ( j < size ) : ( j += 1 ) {
@@ -974,18 +1221,6 @@ fn draw_menu() void {
             blit(&g.square, xa + i * 8, y + j * 8, 8, 8, 0);
         }
     }
-    w4.DRAW_COLORS.* = 0x02;
-    var i: u8 = 0;
-    inline for ( texts ) |t| {
-        if ( @field(ctx, t) ) {
-            text(t, xa + off, y + off + @intCast(i32, i) * 8);
-            i += 1;
-        }
-    }
-
-    w4.DRAW_COLORS.* = 0x03;
-    blit(&g.select_thin_q, xa, ya, 8, 8, 0);
-    blit(&g.select_thin_q, xa + 8 * (block_cnt - 1), ya, 8, 8, 6);
 }
 
 fn draw_objs() void {
