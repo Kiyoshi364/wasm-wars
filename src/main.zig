@@ -813,7 +813,7 @@ fn calculate_movable_tiles(num: ObjId) void {
                 }
                 const sx = dx +% selec_x;
                 const sy = dy +% selec_y;
-                if ( sx > map_size_x or sy > map_size_y ) continue;
+                if ( sx >= map_size_x or sy >= map_size_y ) continue;
                 const movable = ptrs.map[sy][sx].move_cost(mv_typ);
                 if ( movable ) |cost| {
                     const maybe_same_team =
@@ -907,13 +907,13 @@ fn draw_map() void {
     while ( j < screen_tiles_y ) : ( j += 1 ) {
         const y = cy +% j;
         const yts = @as(i32, y) * @as(i32, ts);
-        if ( y > map_size_y ) continue;
+        if ( y >= map_size_y ) continue;
         i = 0;
         w4.DRAW_COLORS.* = 0x43;
         while ( i < screen_tiles_x ) : ( i += 1 ) {
             const x = cx +% i;
             const xts = @as(i32, x) * @as(i32, ts);
-            if ( x > map_size_x ) continue;
+            if ( x >= map_size_x ) continue;
             const tile = map[y][x];
             switch (tile) {
                 .plains => {
@@ -968,12 +968,12 @@ fn draw_map() void {
                 const sj = @intCast(u8, jj);
                 const y = sy +% sj;
                 const yts = @as(i32, y) * ts;
-                if ( y > map_size_y ) continue;
+                if ( y >= map_size_y ) continue;
                 for ( line ) |p, ii| {
                     const si = @intCast(u8, ii);
                     const x = sx +% si;
                     const xts = @as(i32, x) * ts;
-                    if ( x > map_size_x ) continue;
+                    if ( x >= map_size_x ) continue;
                     if ( p ) |_| {
                         w4.DRAW_COLORS.* = 0x01;
                         blit4(&g.sqr_selected_q, xts, yts, 8, 8, 0);
