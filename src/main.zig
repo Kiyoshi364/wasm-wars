@@ -146,7 +146,7 @@ const Loopable = struct{
 };
 
 const Moved_Contex = packed struct {
-    @"resrv a": bool = false,
+    @"capture": bool = false,
     @"no fire": bool = false,
     @"fire"   : bool = false,
     @"unload" : bool = false,
@@ -675,8 +675,11 @@ export fn update() void {
                     and ptrs.selected[old_selec_y][old_selec_x] != null
                     ) {
                     const id = ptrs.obj_id[num];
-                    const is_transporting =
-                        this_obj_info.transporting != null;
+                    const may_unload =
+                        this_obj_info.transporting != null
+                        and ptrs.map[new_y][new_x].move_cost(
+                            ptrs.obj_id[this_obj_info.transporting.?]
+                            .move_cost().typ ) != null;
                     const is_empty = ptrs.obj_map[new_y][new_x] == null
                         or ptrs.obj_map[new_y][new_x].? == num;
                     const should_join =
@@ -693,9 +696,42 @@ export fn update() void {
                                 and ptrs.obj_id[n2].may_transport(id)
                             ) true else false
                         else false;
-                    if ( is_transporting and is_empty) {
-                        menu_max += 1;
-                        ptrs.moved_contex.*.unload = true;
+                    if ( may_unload and is_empty) {
+                        const n2 = this_obj_info.transporting.?;
+                        const move_typ = ptrs.obj_id[n2].move_cost().typ;
+
+                        const center = (selected_range - 1) / 2;
+                        offset.*[0] = new_x -% center;
+                        offset.*[1] = new_y -% center;
+                        ptrs.selected.* =
+                            .{ .{ null } ** selected_range }
+                                ** selected_range;
+                        var i: u4 = 0;
+                        const directions = [4][2]u8{
+                            .{ new_x, new_y-%1 }, .{ new_x-%1, new_y },
+                            .{ new_x+1, new_y }, .{ new_x, new_y+1 }
+                        };
+                        for ( directions ) |d| {
+                            const dx = d[0];
+                            const dy = d[1];
+                            const sx = dx -% offset[0];
+                            const sy = dy -% offset[1];
+                            const tile = ptrs.map[dy][dx];
+                            if ( dx < map_size_x
+                                and dy < map_size_y
+                                and ptrs.obj_map[dy][dx] == null
+                                and tile.move_cost(move_typ)
+                                    != null ) {
+                                ptrs.selected[sy][sx] = 1;
+                                ptrs.unloaded_buff[i] = .{ dx, dy };
+                                i += 1;
+                            }
+                        }
+                        if ( i > 0 ) {
+                            ptrs.unloaded.* = .{ .i = 0, .max = i };
+                            menu_max += 1;
+                            ptrs.moved_contex.*.unload = true;
+                        }
                     }
                     if ( id == .apc and is_empty ) {
                         obj.moveTo(num, new_x, new_y);
@@ -764,9 +800,8 @@ export fn update() void {
                                 }
                             }
                         }
-                        ptrs.attacked.* = .{ .i = 0, .max = i };
-
                         if ( i > 0 ) {
+                            ptrs.attacked.* = .{ .i = 0, .max = i };
                             menu_max += 1;
                             ptrs.moved_contex.*.fire = true;
                         }
@@ -789,9 +824,8 @@ export fn update() void {
                     }
                 };
                 switch ( chosen ) {
-                    .@"resrv a", => {
-                        w4.tracef("moved_context reached an"
-                            ++ "unreachable state: %s", chosen);
+                    .@"capture", => {
+                        w4.trace("capture: not implemented");
                         unreachable;
                     },
                     .@"no fire", => {
@@ -858,10 +892,19 @@ export fn update() void {
                 }
             },
             .unload_menu => {
-                // TODO: unload_menu
+                const i = ptrs.unloaded.*.i;
+                ptrs.cursor_pos.* = ptrs.unloaded_buff[i];
+                ptrs.cursor_state.* = .unload;
             },
             .unload => {
-                // TODO: unload
+                const num = ptrs.selec_obj.*;
+                const n2 = ptrs.obj_info[num].transporting.?;
+                const n2_x = ptrs.cursor_pos[0];
+                const n2_y = ptrs.cursor_pos[1];
+                obj.moveTo(n2, n2_x, n2_y);
+                ptrs.obj_info[num].acted = true;
+                ptrs.obj_info[n2].acted = true;
+                ptrs.cursor_state.* = .initial;
             },
             .attack => {
                 const atk_num = ptrs.selec_obj.*;
@@ -1267,6 +1310,11 @@ fn draw_objs() void {
                     .infantry => blit(&g.infantry, x, y, 8, 8, 1),
                     .mech     => blit(&g.mech    , x, y, 8, 8, 1),
                     .apc      => blit(&g.apc     , x, y, 8, 8, 1),
+                }
+
+                if ( obj_info.transporting != null ) {
+                    w4.DRAW_COLORS.* = 0x01;
+                    blit(&g.square, x + 4, y + 4, 3, 3, 0);
                 }
             }
         }
