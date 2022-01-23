@@ -928,7 +928,26 @@ fn draw_map() void {
                     w4.DRAW_COLORS.* = 0x42;
                     blit(&g.mountain, xts, yts, 16, 16, 0);
                 },
-                .river, .sea => {
+                .road, .bridge => {
+                    w4.DRAW_COLORS.* = 0x04;
+                    blit4(&g.square, xts, yts, 8, 8, 0);
+
+                    w4.DRAW_COLORS.* = 0x42;
+                    blit(&g.road_pc, xts + 4, yts    , 4, 8, 0);
+                    blit(&g.road_pc, xts + 8, yts    , 4, 8, 2);
+                    blit(&g.road_pc, xts + 4, yts + 8, 4, 8, 0);
+                    blit(&g.road_pc, xts + 8, yts + 8, 4, 8, 2);
+
+                    // blit(&g.road_pc_rot, xts    , yts + 4, 8, 4, 0);
+                    // blit(&g.road_pc_rot, xts + 8, yts + 4, 8, 4, 0);
+                    // blit(&g.road_pc_rot, xts    , yts + 8, 8, 4, 4);
+                    // blit(&g.road_pc_rot, xts + 8, yts + 8, 8, 4, 4);
+                },
+                .river => {
+                    w4.DRAW_COLORS.* = 0x42;
+                    blit(&g.river, xts, yts, 16, 16, 0);
+                },
+                .sea => {
                     w4.DRAW_COLORS.* = 0x44;
                     blit4(&g.square, xts, yts, 8, 8, 0);
                 },
