@@ -1,2 +1,4 @@
 /zig-cache
 /zig-out
+/wasm4
+*.html
