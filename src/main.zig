@@ -965,6 +965,14 @@ fn draw_map() void {
                     w4.DRAW_COLORS.* = 0x44;
                     blit4(&g.square, xts, yts, 8, 8, 0);
                 },
+                .hq => {
+                    w4.DRAW_COLORS.* = 0x42;
+                    blit(&g.hq, xts, yts, 16, 16, 0);
+                },
+                .city => {
+                    w4.DRAW_COLORS.* = 0x42;
+                    blit(&g.city, xts, yts, 16, 16, 0);
+                },
                 else => {
                     w4.DRAW_COLORS.* = 0x21;
                     blit4(&g.sqr_border_q, xts, yts, 8, 8, 0);
