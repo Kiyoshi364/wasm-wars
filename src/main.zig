@@ -11,7 +11,7 @@ const gpad_timer_max = 13;
 // Map
 const tilespace = 16;
 const map_size_x = 15;
-const map_size_y = 21;
+const map_size_y = 10;
 const screen_tiles_x = 10;
 const screen_tiles_y =
     if (screen_tiles_x < map_size_y) screen_tiles_x else map_size_y;
@@ -251,17 +251,30 @@ export fn start() void {
     ptrs.cursor_pos[0] = 1;
     ptrs.cursor_pos[1] = 1;
     { // map initialization
-        ptrs.map[7][8] = .mountain;
-        var i: u8 = 0;
-        var j: u8 = 0;
-        while ( j < map_size_y ) : ( j += 1 ) {
-            i = 0;
-            while ( i < map_size_x ) : ( i += 1 ) {
-                if ( i == 0 or i == map_size_x-1 or j == 0 or j == map_size_y-1 ) {
-                    ptrs.map[j][i] = .sea;
-                }
-            }
-        }
+        const t = info.Map_Tile;
+        ptrs.map.* = [map_size_y][map_size_x]t{
+[_]t{.woods} ++ [_]t{.plains}**8 ++ [_]t{.mountain}**2 ++ [_]t{.plains}**4,
+[_]t{.plains, .woods, .plains, .plains, .city, .city, .plains, .woods, .plains} ++ [_]t{.mountain}**2 ++ [_]t{.plains}**2 ++ [_]t{.road, .hq},
+[_]t{.plains} ++ [_]t{.road}**7 ++ [_]t{.woods} ++ [_]t{.mountain}**2 ++ [_]t{.city, .plains, .road, .plains},
+[_]t{.plains, .road} ++ [_]t{.plains}**2 ++ [_]t{.mountain}**2 ++ [_]t{.plains, .road, .plains} ++ [_]t{.mountain}**2 ++ [_]t{.plains, .plains, .road, .plains},
+[_]t{.plains, .road} ++ [_]t{.plains}**2 ++ [_]t{.mountain}**2 ++ [_]t{.plains, .road, .plains} ++ [_]t{.mountain}**2 ++ [_]t{.plains, .plains, .road, .plains},
+[_]t{.river, .bridge} ++ [_]t{.river}**5 ++ [_]t{.bridge} ++ [_]t{.river}**5 ++ [_]t{.bridge, .river},
+[_]t{.plains, .road} ++ [_]t{.plains}**2 ++ [_]t{.mountain}**2 ++ [_]t{.plains, .road, .plains} ++ [_]t{.mountain}**2 ++ [_]t{.plains, .plains, .road, .plains},
+[_]t{.plains, .road} ++ [_]t{.plains}**2 ++ [_]t{.mountain}**2 ++ [_]t{.plains} ++ [_]t{.road}**7 ++ [_]t{.plains},
+[_]t{.hq, .road, .plains, .city} ++ [_]t{.mountain}**2 ++ [_]t{.woods} ++ [_]t{.plains}**6 ++ [_]t{.woods, .plains},
+[_]t{.plains, .road, .plains, .plains} ++ [_]t{.mountain}**2 ++ [_]t{.plains, .woods, .plains, .city, .city, .plains, .plains, .plains, .woods},
+        };
+        // ptrs.map[7][8] = .mountain;
+        // var i: u8 = 0;
+        // var j: u8 = 0;
+        // while ( j < map_size_y ) : ( j += 1 ) {
+        //     i = 0;
+        //     while ( i < map_size_x ) : ( i += 1 ) {
+        //         if ( i == 0 or i == map_size_x-1 or j == 0 or j == map_size_y-1 ) {
+        //             ptrs.map[j][i] = .mountain;
+        //         }
+        //     }
+        // }
     }
     { // Set team count
         ptrs.team_num.* = 2;
@@ -800,6 +813,7 @@ fn calculate_movable_tiles(num: ObjId) void {
                 }
                 const sx = dx +% selec_x;
                 const sy = dy +% selec_y;
+                if ( sx > map_size_x or sy > map_size_y ) continue;
                 const movable = ptrs.map[sy][sx].move_cost(mv_typ);
                 if ( movable ) |cost| {
                     const maybe_same_team =
@@ -839,7 +853,7 @@ fn calculate_movable_tiles(num: ObjId) void {
     }
     ptrs.selected.* = local_selec;
 
-    // Useful for ranged attacks
+    // note: Useful for ranged attacks
     // for ( ptrs.selected ) |*ss, jj| {
     //     const j = @intCast(u8, jj);
     //         if ( y +% j >= map_size_y ) continue;
@@ -895,17 +909,26 @@ fn draw_map() void {
         const yts = @as(i32, y) * @as(i32, ts);
         if ( y > map_size_y ) continue;
         i = 0;
+        w4.DRAW_COLORS.* = 0x43;
         while ( i < screen_tiles_x ) : ( i += 1 ) {
             const x = cx +% i;
             const xts = @as(i32, x) * @as(i32, ts);
             if ( x > map_size_x ) continue;
             const tile = map[y][x];
             switch (tile) {
-                .mountain => {
-                    w4.DRAW_COLORS.* = 0x43;
+                .plains => {
+                    w4.DRAW_COLORS.* = 0x42;
                     blit4(&g.square, xts, yts, 8, 8, 0);
                 },
-                .sea => {
+                .woods => {
+                    w4.DRAW_COLORS.* = 0x42;
+                    blit(&g.woods, xts, yts, 16, 16, 0);
+                },
+                .mountain => {
+                    w4.DRAW_COLORS.* = 0x42;
+                    blit(&g.mountain, xts, yts, 16, 16, 0);
+                },
+                .river, .sea => {
                     w4.DRAW_COLORS.* = 0x44;
                     blit4(&g.square, xts, yts, 8, 8, 0);
                 },
@@ -1070,7 +1093,7 @@ fn draw_objs() void {
                     3 => 0x0123,
                 };
                 if ( ptrs.obj_info[num].acted ) {
-                    w4.DRAW_COLORS.* = color & 0xF0FF;
+                    w4.DRAW_COLORS.* = color & 0xF0FF | 0x0200;
                 } else {
                     w4.DRAW_COLORS.* = color;
                 }
@@ -1120,5 +1143,22 @@ fn text(comptime str: []const u8, x: i32, y: i32) void {
         if (l) |letter| {
             blit(&letter, x + @intCast(i32, i) * advance, y, 8, 4, 0);
         }
+    }
+}
+
+const ST = ?*@import("std").builtin.StackTrace;
+pub fn panic(msg: []const u8, trace: ST) noreturn {
+    @setCold(true);
+
+    w4.trace(">> ahh, panic!");
+    w4.trace(msg);
+    if ( trace ) |t| {
+        w4.tracef("  index: %d", @intCast(i32, t.index));
+    } else {
+        w4.trace("  no trace :(");
+    }
+
+    while ( true ) {
+        @breakpoint();
     }
 }

@@ -1,7 +1,8 @@
 // Terrain
 pub const Map_Tile = enum {
-    plains, woods, mountain, road, // bridge,
-    sea, // reefs, beach, river,
+    plains, woods, mountain, road, bridge,
+    sea, // reefs, beach,
+    river,
     // pipe, pipe_seam, pipe_broken,
     hq, city, factory, // airport, port,
     // miss_silo, com_tower, lab,
@@ -9,7 +10,7 @@ pub const Map_Tile = enum {
     const Self = @This();
     pub fn defense(self: Self) Defense {
         return switch (self) {
-            .road, .sea, => 0,
+            .road, .bridge, .sea, .river, => 0,
             .plains, => 1,
             .woods, => 2,
             .city, .factory, => 3,
@@ -21,19 +22,20 @@ pub const Map_Tile = enum {
         return switch (typ) {
             .infantry => switch (self) {
                 .plains, .woods, .road,
-                // .bridge, .beach,
+                .bridge, // .beach,
                 .hq, .city, .factory, // .airport, .port,
                 // .miss_silo, .com_tower, .lab,
                     => @as(?Cost, 1),
-                // .river,
-                .mountain, => @as(?Cost, 2),
+                .mountain, .river,
+                    => @as(?Cost, 2),
                 .sea, // .reefs,
                 // .pipe, .pipe_seam, .pipe_broken,
                     => null,
             },
             .mech => switch (self) {
-                .plains, .woods, .mountain, .road,
-                // .bridge, .beach, .river,
+                .plains, .woods, .mountain, .road, .bridge,
+                // .beach,
+                .river,
                 .hq, .city, .factory, // .airport, .port,
                 // .miss_silo, .com_tower, .lab,
                     => @as(?Cost, 1),
@@ -43,12 +45,12 @@ pub const Map_Tile = enum {
             },
             .treads => switch (self) {
                 .plains, .road,
-                // .bridge, .beach,
+                .bridge, // .beach,
                 .hq, .city, .factory, // .airport, .port,
                 // .miss_silo, .com_tower, .lab,
                     => @as(?Cost, 1),
                 .woods, => @as(?Cost, 2),
-                .mountain, // .river,
+                .mountain, .river,
                 .sea, // .reefs,
                 // .pipe, .pipe_seam, .pipe_broken,
                     => null,
