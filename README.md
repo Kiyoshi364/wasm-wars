@@ -41,6 +41,14 @@ w4 bundle zig-out/lib/cart.wasm --html index.html
 
  - Tip: the little car is an APC, it can transport foot soldiers (one at a time) by moving them into the APC's tile.
 
+# Known Bugs
+- Behavior
+    - Loading a second unit into a transport unit (currently only APC)
+    leaks (deletes but doesn't free the memory) the previous loaded unit
+- Graphical
+    - Evoking an menu on the farther right side,
+    renders the menu off-screen
+
 # Missing Features (Priority List)
 
 ### Important
