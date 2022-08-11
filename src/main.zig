@@ -505,6 +505,8 @@ export fn update() void {
                     const should_load =
                         if ( ptrs.obj_map[new_y][new_x] ) |n2|
                             if ( num != n2
+                                // This should fix (double loading)
+                                and ptrs.obj_info[n2].transporting == null
                                 and ptrs.obj_id[n2].may_transport(id)
                             ) true else false
                         else false;
@@ -1055,7 +1057,7 @@ fn draw_menu(state: Cursor_State) void {
 
     const block_cnt = switch ( state ) {
         .initial, .selected, .unload, .attack, .day_menu, => {
-            w4.trace("draw_menu: receaved unreachable state");
+            w4.trace("draw_menu: received unreachable state");
             unreachable;
         },
         .moved => blk: {
