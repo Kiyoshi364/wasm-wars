@@ -7,7 +7,7 @@
 // │                                                                           │
 // └───────────────────────────────────────────────────────────────────────────┘
 
-pub const CANVAS_SIZE: u32 = 160;
+pub const SCREEN_SIZE: u32 = 160;
 
 // ┌───────────────────────────────────────────────────────────────────────────┐
 // │                                                                           │
@@ -25,6 +25,7 @@ pub const MOUSE_X: *const i16 = @intToPtr(*const i16, 0x1a);
 pub const MOUSE_Y: *const i16 = @intToPtr(*const i16, 0x1c);
 pub const MOUSE_BUTTONS: *const u8 = @intToPtr(*const u8, 0x1e);
 pub const SYSTEM_FLAGS: *u8 = @intToPtr(*u8, 0x1f);
+pub const NETPLAY: *const u8 = @intToPtr(*const u8, 0x20);
 pub const FRAMEBUFFER: *[6400]u8 = @intToPtr(*[6400]u8, 0xA0);
 
 pub const BUTTON_1: u8 = 1;
@@ -97,6 +98,8 @@ pub const TONE_MODE1: u32 = 0;
 pub const TONE_MODE2: u32 = 4;
 pub const TONE_MODE3: u32 = 8;
 pub const TONE_MODE4: u32 = 12;
+pub const TONE_PAN_LEFT: u32 = 16;
+pub const TONE_PAN_RIGHT: u32 = 32;
 
 // ┌───────────────────────────────────────────────────────────────────────────┐
 // │                                                                           │
